@@ -5,7 +5,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavType
@@ -37,6 +40,8 @@ fun AppNavHost(initialAgentId: String? = null) {
     val context = LocalContext.current
     val container = (context.applicationContext as CompanionApp).container
     val navController = rememberNavController()
+    // Survives recreation so a notification deep link only navigates once.
+    var deepLinkConsumed by rememberSaveable { mutableStateOf(false) }
 
     // Gate on the (async) DataStore read so we pick the right start destination once.
     val hasKey by produceState<Boolean?>(initialValue = null) {
@@ -91,8 +96,11 @@ fun AppNavHost(initialAgentId: String? = null) {
             }
 
             LaunchedEffect(initialAgentId, hasKey) {
-                if (hasKey == true && !initialAgentId.isNullOrBlank()) {
-                    navController.navigate(Routes.agentDetail(initialAgentId))
+                if (hasKey == true && !initialAgentId.isNullOrBlank() && !deepLinkConsumed) {
+                    deepLinkConsumed = true
+                    navController.navigate(Routes.agentDetail(initialAgentId)) {
+                        launchSingleTop = true
+                    }
                 }
             }
         }

@@ -51,8 +51,10 @@ class LaunchViewModel(
     init {
         viewModelScope.launch {
             val cached = repoCache.get()
-            if (cached == null || cached.urls.isEmpty()) {
-                // First open with an empty cache — fetch once automatically.
+            if (cached == null) {
+                // First open with no cache at all — fetch once automatically.
+                // A cached-but-empty list is respected (zero repos is a valid state;
+                // re-fetching every open would burn the 1/min rate limit).
                 refreshRepos()
             } else {
                 _uiState.update {

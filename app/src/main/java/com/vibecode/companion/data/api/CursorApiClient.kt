@@ -1,6 +1,7 @@
 package com.vibecode.companion.data.api
 
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import okhttp3.Call
 import okhttp3.Callback
@@ -45,9 +46,13 @@ class CursorApiClient(
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    /** Separate client for SSE: no read timeout, the stream stays open between heartbeats. */
+    /**
+     * Separate client for SSE: long read timeout so a silent (dead) socket surfaces as a
+     * failure. The spec guarantees heartbeat events, so 90s without data means the
+     * connection is gone — onFailure fires and the reconnect loop recovers.
+     */
     val sseClient: OkHttpClient = httpClient.newBuilder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
         .build()
 
     // ---- Auth / account ----
@@ -143,7 +148,13 @@ class CursorApiClient(
 
     private suspend inline fun <reified T> execute(request: Request): T {
         val bodyText = awaitResponse(request)
-        return json.decodeFromString(bodyText)
+        return try {
+            json.decodeFromString(bodyText)
+        } catch (e: SerializationException) {
+            throw CursorApiException(200, "invalid_response", "Unexpected response from the Cursor API: ${e.message}")
+        } catch (e: IllegalArgumentException) {
+            throw CursorApiException(200, "invalid_response", "Unexpected response from the Cursor API: ${e.message}")
+        }
     }
 
     private suspend fun awaitResponse(request: Request): String =

@@ -2,6 +2,7 @@ package com.vibecode.companion.work
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -16,13 +17,15 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.io.IOException
+import java.time.Instant
 
 /**
  * Periodic poll for terminal runs (local-notification MVP — replaced by
  * webhook→FCM push in milestone 2). Compares each agent's latest run status
  * against the last known status persisted in DataStore and notifies on
- * transitions into FINISHED / ERROR. Budget: at most ~6 API calls per poll
- * (1 list + up to 5 run fetches).
+ * transitions into FINISHED / ERROR; runs first seen already terminal notify
+ * when they were updated after the last completed poll. Budget: at most
+ * ~6 API calls per poll (1 list + up to 5 run fetches).
  */
 class AgentPollWorker(
     context: Context,
@@ -31,6 +34,7 @@ class AgentPollWorker(
 
     private companion object {
         val PREF_RUN_STATUSES = stringPreferencesKey("last_known_run_statuses")
+        val PREF_LAST_POLL_COMPLETED_AT = longPreferencesKey("last_poll_completed_at")
         val STATUS_MAP_SERIALIZER = MapSerializer(String.serializer(), String.serializer())
         const val MAX_RUN_FETCHES = 5
     }
@@ -47,7 +51,12 @@ class AgentPollWorker(
                 .items
 
             val previous = readStatuses()
-            val current = mutableMapOf<String, String>()
+            val lastPollCompletedAt = readLastPollCompletedAt()
+            // Seed from the previous map, kept to runs still attached to listed
+            // agents (bounds growth). This poll's successful fetches overlay
+            // below, so a run whose fetch fails keeps its previous status.
+            val attachedRunIds = agents.mapNotNull { it.latestRunId }.toSet()
+            val current = previous.filterKeys { it in attachedRunIds }.toMutableMap()
 
             val candidates = agents.filter { it.latestRunId != null }.take(MAX_RUN_FETCHES)
             for (agent in candidates) {
@@ -63,10 +72,19 @@ class AgentPollWorker(
                 current[run.id] = run.status
 
                 val prior = previous[run.id]
+                val isTerminalNow =
+                    run.status == RunStatus.FINISHED || run.status == RunStatus.ERROR
                 val justReachedTerminal = prior != null &&
                     !RunStatus.isTerminal(prior) &&
-                    (run.status == RunStatus.FINISHED || run.status == RunStatus.ERROR)
-                if (justReachedTerminal) {
+                    isTerminalNow
+                // A run that started AND finished within one poll interval has
+                // no prior status — notify if it was updated after the last
+                // completed poll. No baseline yet (first poll after install)
+                // suppresses, so historical runs don't spam.
+                val finishedSinceLastPoll = prior == null && isTerminalNow &&
+                    lastPollCompletedAt != null &&
+                    updatedAfter(run.updatedAt, lastPollCompletedAt)
+                if (justReachedTerminal || finishedSinceLastPoll) {
                     AgentNotifications.notifyRunTerminal(
                         context = applicationContext,
                         agentId = agent.id,
@@ -77,8 +95,7 @@ class AgentPollWorker(
                 }
             }
 
-            // Prune to the runs seen this poll so the map never grows unbounded.
-            writeStatuses(current)
+            writePollState(current)
             Result.success()
         } catch (_: Exception) {
             Result.retry()
@@ -95,8 +112,20 @@ class AgentPollWorker(
         }
     }
 
-    private suspend fun writeStatuses(statuses: Map<String, String>) {
+    private suspend fun readLastPollCompletedAt(): Long? =
+        applicationContext.companionDataStore.data.first()[PREF_LAST_POLL_COMPLETED_AT]
+
+    private fun updatedAfter(updatedAt: String, epochMillis: Long): Boolean = try {
+        Instant.parse(updatedAt).toEpochMilli() > epochMillis
+    } catch (_: Exception) {
+        false
+    }
+
+    private suspend fun writePollState(statuses: Map<String, String>) {
         val encoded = json.encodeToString(STATUS_MAP_SERIALIZER, statuses)
-        applicationContext.companionDataStore.edit { it[PREF_RUN_STATUSES] = encoded }
+        applicationContext.companionDataStore.edit {
+            it[PREF_RUN_STATUSES] = encoded
+            it[PREF_LAST_POLL_COMPLETED_AT] = System.currentTimeMillis()
+        }
     }
 }

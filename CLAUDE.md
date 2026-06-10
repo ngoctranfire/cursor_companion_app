@@ -26,8 +26,10 @@ See PLAN.md for vision, decisions, and milestones.
   match `docs/cloud-agents-openapi.yaml` (the source of truth — re-fetch from
   https://cursor.com/docs-static/cloud-agents-openapi.yaml when the API changes).
   Status enums are raw strings on purpose (beta API; don't crash on new values).
-- `data/api/RunStreamClient.kt` — SSE flow for live run events; uses the
-  no-read-timeout `sseClient`. Reconnect by re-collecting with `Last-Event-ID`.
+- `data/api/RunStreamClient.kt` — SSE flow for live run events; `sseClient` uses a
+  90s read timeout (heartbeats are guaranteed, so silence means a dead socket).
+  Reconnect by re-collecting with `Last-Event-ID`; on 400/410 protocol errors the
+  ViewModel clears the stored event id and reconnects fresh.
 - `data/storage/` — Keystore-encrypted API key (`ApiKeyStore`), repo cache
   (`RepoCache`, mandatory — the repositories endpoint allows 1 req/min).
 - `ui/<feature>/` — one package per screen: Composable + ViewModel.

@@ -81,6 +81,7 @@ class AgentDetailViewModel(
     val uiState: StateFlow<AgentDetailUiState> = _uiState.asStateFlow()
 
     private var streamJob: Job? = null
+    private var loadJob: Job? = null
     private var lastEventId: String? = null
 
     /** Kind of the previous text-producing SSE event, for delta coalescing. */
@@ -121,6 +122,8 @@ class AgentDetailViewModel(
             _uiState.update { it.copy(isSending = true) }
             try {
                 val run = apiClient.createRun(agentId, CreateRunRequest(prompt = PromptBody(text))).run
+                // A stale in-flight load must not overwrite the just-created run.
+                loadJob?.cancel()
                 lastEventId = null
                 lastTextKind = null
                 _uiState.update { state ->
@@ -173,7 +176,8 @@ class AgentDetailViewModel(
     // ---- Loading ----
 
     private fun load(initial: Boolean) {
-        viewModelScope.launch {
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoading = initial, loadError = null) }
             try {
                 val agent = apiClient.getAgent(agentId)
@@ -237,12 +241,24 @@ class AgentDetailViewModel(
                 var sawDone = false
                 runStreamClient.streamRun(agentId, runId, lastEventId).collect { event ->
                     when (event) {
-                        is RunStreamEvent.ConnectionClosed -> Unit
-                        is RunStreamEvent.Done -> {
-                            sawDone = true
-                            attempt = 0
+                        is RunStreamEvent.ConnectionClosed -> {
+                            // The server rejected our resume point — clear it so the
+                            // next attempt restarts fresh (status is replayed on connect).
+                            if (event.httpCode == 400 || event.httpCode == 410 ||
+                                event.errorCode == "invalid_last_event_id" ||
+                                event.errorCode == "stream_expired"
+                            ) {
+                                lastEventId = null
+                            }
                         }
-                        else -> attempt = 0 // healthy connection — reset backoff
+                        is RunStreamEvent.Done -> sawDone = true
+                        else -> Unit
+                    }
+                    // Only real progress resets backoff: the replayed status (and
+                    // heartbeats) carry no SSE id, so a connect-then-drop server
+                    // must not keep the retry delay pinned at the minimum.
+                    if (event !is RunStreamEvent.ConnectionClosed && event.eventId != null) {
+                        attempt = 0
                     }
                     handleStreamEvent(event)
                 }

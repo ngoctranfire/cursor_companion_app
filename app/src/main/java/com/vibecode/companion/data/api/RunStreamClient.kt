@@ -49,8 +49,18 @@ sealed class RunStreamEvent {
     data class Done(override val eventId: String?) : RunStreamEvent()
     data class Unknown(override val eventId: String?, val type: String?, val raw: String) : RunStreamEvent()
 
-    /** Emitted locally (not by the server) when the connection drops, so UIs can offer reconnect. */
-    data class ConnectionClosed(override val eventId: String?, val reason: String?) : RunStreamEvent()
+    /**
+     * Emitted locally (not by the server) when the connection drops, so UIs can offer reconnect.
+     * [httpCode] and [errorCode] (the error envelope's `error.code`, e.g. `invalid_last_event_id`,
+     * `stream_expired`) are populated when the failure carried an HTTP response, so callers can
+     * distinguish protocol errors from network blips.
+     */
+    data class ConnectionClosed(
+        override val eventId: String?,
+        val reason: String?,
+        val httpCode: Int? = null,
+        val errorCode: String? = null,
+    ) : RunStreamEvent()
 }
 
 class RunStreamClient(
@@ -69,7 +79,7 @@ class RunStreamClient(
         callbackFlow {
             val key = apiKeyProvider()
             if (key == null) {
-                trySend(RunStreamEvent.ConnectionClosed(null, "No API key configured"))
+                trySend(RunStreamEvent.ConnectionClosed(null, "No API key configured", null, null))
                 close()
                 return@callbackFlow
             }
@@ -91,7 +101,17 @@ class RunStreamClient(
 
                     override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                         val reason = t?.message ?: response?.let { "HTTP ${it.code}" } ?: "connection lost"
-                        trySend(RunStreamEvent.ConnectionClosed(null, reason))
+                        // Parse the error envelope's code defensively — the body may be
+                        // absent, already consumed, or not JSON at all.
+                        val errorCode = try {
+                            response?.body?.string()?.let { body ->
+                                json.parseToJsonElement(body).jsonObject["error"]
+                                    ?.jsonObject?.get("code")?.jsonPrimitive?.contentOrNull
+                            }
+                        } catch (_: Exception) {
+                            null
+                        }
+                        trySend(RunStreamEvent.ConnectionClosed(null, reason, response?.code, errorCode))
                         close()
                     }
 

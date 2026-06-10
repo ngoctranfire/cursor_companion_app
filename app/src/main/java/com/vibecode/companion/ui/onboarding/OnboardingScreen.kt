@@ -1,5 +1,6 @@
 package com.vibecode.companion.ui.onboarding
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
@@ -190,9 +191,13 @@ fun OnboardingScreen(onConnected: () -> Unit) {
 
             TextButton(
                 onClick = {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse("https://cursor.com/dashboard")),
-                    )
+                    try {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://cursor.com/dashboard")),
+                        )
+                    } catch (_: ActivityNotFoundException) {
+                        // No browser installed — nothing sensible to do in a sample app.
+                    }
                 },
             ) {
                 Icon(

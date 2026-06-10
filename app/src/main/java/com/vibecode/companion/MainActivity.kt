@@ -16,7 +16,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         // Set by status notifications (see AgentNotifications) to deep-link into a run.
-        val initialAgentId = intent?.getStringExtra("agentId")
+        // Only honored on fresh launches — recreations (rotation/theme change) restore
+        // their own nav state and must not re-trigger the deep link.
+        val initialAgentId = if (savedInstanceState == null) intent?.getStringExtra("agentId") else null
+        intent?.removeExtra("agentId")
         setContent {
             CompanionTheme {
                 Surface(
