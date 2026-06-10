@@ -4,6 +4,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -34,6 +35,10 @@ sealed class RunStreamEvent {
         val callId: String?,
         val name: String?,
         val status: String?,
+        /** Tool-specific JSON arguments (e.g. the path for read_file), when streamed. */
+        val args: JsonElement? = null,
+        /** Tool-specific JSON result, when streamed (may be truncated server-side). */
+        val result: JsonElement? = null,
     ) : RunStreamEvent()
 
     data class Result(
@@ -138,7 +143,14 @@ class RunStreamClient(
             "status" -> RunStreamEvent.Status(id, str("runId"), str("status"))
             "assistant" -> RunStreamEvent.Assistant(id, str("text") ?: data)
             "thinking" -> RunStreamEvent.Thinking(id, str("text") ?: data)
-            "tool_call" -> RunStreamEvent.ToolCall(id, str("callId"), str("name"), str("status"))
+            "tool_call" -> RunStreamEvent.ToolCall(
+                eventId = id,
+                callId = str("callId"),
+                name = str("name"),
+                status = str("status"),
+                args = obj?.get("args"),
+                result = obj?.get("result"),
+            )
             "result" -> RunStreamEvent.Result(
                 eventId = id,
                 status = str("status"),

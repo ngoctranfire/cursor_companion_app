@@ -20,9 +20,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import android.content.Intent
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,6 +68,7 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
     }
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
 
     LaunchedEffect(state.transientMessage) {
         val message = state.transientMessage ?: return@LaunchedEffect
@@ -117,6 +121,22 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
                     if (state.isRunActive) {
                         TextButton(onClick = vm::cancelRun, enabled = !state.isCancelling) {
                             Text("Cancel run", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    val agentUrl = state.agent?.url
+                    if (agentUrl != null) {
+                        IconButton(
+                            onClick = {
+                                // Hand off to desktop: this link opens Cursor Web, whose
+                                // "Open in Cursor" button deep-links into the desktop app.
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, agentUrl)
+                                }
+                                context.startActivity(Intent.createChooser(send, "Share agent link"))
+                            },
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = "Share agent link")
                         }
                     }
                     IconButton(onClick = vm::refresh) {

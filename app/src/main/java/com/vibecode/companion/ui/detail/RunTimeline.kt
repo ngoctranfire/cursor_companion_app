@@ -136,39 +136,99 @@ private fun ThinkingBlock(item: TimelineItem.Thinking) {
 @Composable
 private fun ToolCallRow(item: TimelineItem.Tool) {
     val normalized = item.status?.lowercase().orEmpty()
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
+    val expandable = item.argsPretty != null || item.resultPretty != null
+    var expanded by remember(item.callId) { mutableStateOf(false) }
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (expandable) Modifier.clickable { expanded = !expanded } else Modifier)
             .padding(vertical = 2.dp),
     ) {
-        when (normalized) {
-            in COMPLETED_TOOL_STATUSES -> Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = "Completed",
-                tint = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.size(14.dp),
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            when (normalized) {
+                in COMPLETED_TOOL_STATUSES -> Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Completed",
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(14.dp),
+                )
+                in FAILED_TOOL_STATUSES -> Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Failed",
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(14.dp),
+                )
+                else -> CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = item.name ?: "tool",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
             )
-            in FAILED_TOOL_STATUSES -> Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = "Failed",
-                tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(14.dp),
-            )
-            else -> CircularProgressIndicator(
-                modifier = Modifier.size(12.dp),
-                strokeWidth = 1.5.dp,
+            if (item.detail != null) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = item.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            if (expandable) {
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Collapse tool details" else "Expand tool details",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+        if (expanded) {
+            ToolJsonBlock(label = "Args", json = item.argsPretty)
+            ToolJsonBlock(label = "Result", json = item.resultPretty)
+        }
+    }
+}
+
+@Composable
+private fun ToolJsonBlock(label: String, json: String?) {
+    if (json == null) return
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 22.dp, top = 4.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Surface(
+            shape = RoundedCornerShape(6.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp),
+        ) {
+            Text(
+                text = json,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(8.dp),
             )
         }
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = item.name ?: "tool",
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
 

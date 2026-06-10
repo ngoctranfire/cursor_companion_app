@@ -26,7 +26,15 @@ import java.io.IOException
 sealed interface TimelineItem {
     data class AssistantText(val text: String) : TimelineItem
     data class Thinking(val text: String) : TimelineItem
-    data class Tool(val callId: String?, val name: String?, val status: String?) : TimelineItem
+    data class Tool(
+        val callId: String?,
+        val name: String?,
+        val status: String?,
+        /** One-line summary: the path read, the pattern grepped, the command run… */
+        val detail: String? = null,
+        val argsPretty: String? = null,
+        val resultPretty: String? = null,
+    ) : TimelineItem
     data class ResultCard(
         val status: String?,
         val text: String?,
@@ -287,6 +295,9 @@ class AgentDetailViewModel(
 
             is RunStreamEvent.ToolCall -> {
                 lastTextKind = null
+                val detail = toolCallDetail(event.name, event.args)
+                val argsPretty = prettyToolJson(event.args)
+                val resultPretty = prettyToolJson(event.result)
                 _uiState.update { state ->
                     val timeline = state.timeline.toMutableList()
                     val index = event.callId?.let { callId ->
@@ -297,9 +308,15 @@ class AgentDetailViewModel(
                         timeline[index] = existing.copy(
                             name = event.name ?: existing.name,
                             status = event.status ?: existing.status,
+                            detail = detail ?: existing.detail,
+                            argsPretty = argsPretty ?: existing.argsPretty,
+                            resultPretty = resultPretty ?: existing.resultPretty,
                         )
                     } else {
-                        timeline += TimelineItem.Tool(event.callId, event.name, event.status)
+                        timeline += TimelineItem.Tool(
+                            event.callId, event.name, event.status,
+                            detail, argsPretty, resultPretty,
+                        )
                     }
                     state.copy(timeline = timeline)
                 }
