@@ -61,7 +61,9 @@ private fun repoDisplayName(url: String): String =
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LaunchScreen(onLaunched: (agentId: String) -> Unit, onBack: () -> Unit) {
-    val vm = companionViewModel { container -> LaunchViewModel(container.apiClient, container.repoCache) }
+    val vm = companionViewModel { container ->
+        LaunchViewModel(container.apiClient, container.repoCache, container.promptStore)
+    }
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 

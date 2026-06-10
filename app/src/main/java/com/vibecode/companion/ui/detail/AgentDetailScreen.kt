@@ -64,7 +64,7 @@ import com.vibecode.companion.ui.common.relativeTime
 @Composable
 fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
     val vm = companionViewModel { container ->
-        AgentDetailViewModel(container.apiClient, container.runStreamClient, agentId)
+        AgentDetailViewModel(container.apiClient, container.runStreamClient, container.promptStore, agentId)
     }
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -186,6 +186,8 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
             else -> DetailBody(
                 state = state,
                 onReconnect = vm::reconnect,
+                onViewPastRun = vm::viewPastRun,
+                onViewLatest = vm::viewLatest,
                 contentPadding = padding,
             )
         }
@@ -196,6 +198,8 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
 private fun DetailBody(
     state: AgentDetailUiState,
     onReconnect: () -> Unit,
+    onViewPastRun: (com.vibecode.companion.data.api.Run) -> Unit,
+    onViewLatest: () -> Unit,
     contentPadding: PaddingValues,
 ) {
     val listState = rememberLazyListState()
@@ -222,11 +226,35 @@ private fun DetailBody(
         if (pastRunsOldestFirst.isNotEmpty()) {
             item(key = "past_header") { SectionHeader("Earlier runs") }
             items(pastRunsOldestFirst, key = { "past_${it.id}" }) { run ->
-                PastRunCard(run)
+                PastRunCard(run, onViewSteps = { onViewPastRun(run) })
             }
             item(key = "current_header") {
                 Spacer(Modifier.height(4.dp))
-                SectionHeader("Latest run")
+                SectionHeader(if (state.viewedPastRun != null) "Run history" else "Latest run")
+            }
+        }
+
+        val viewedPast = state.viewedPastRun
+        if (viewedPast != null) {
+            item(key = "past_banner") {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            text = "Viewing earlier run · ${relativeTime(viewedPast.updatedAt)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = onViewLatest) { Text("Back to latest") }
+                    }
+                }
             }
         }
 
@@ -244,13 +272,17 @@ private fun DetailBody(
             TimelineItemView(timelineItem, state.agent?.url)
         }
 
-        if (state.isStreaming) {
+        if (state.isStreaming || state.isReplaying) {
             item(key = "live") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = if (state.timeline.isEmpty()) "Waiting for events…" else "Live",
+                        text = when {
+                            state.isReplaying -> "Replaying history…"
+                            state.timeline.isEmpty() -> "Waiting for events…"
+                            else -> "Live"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

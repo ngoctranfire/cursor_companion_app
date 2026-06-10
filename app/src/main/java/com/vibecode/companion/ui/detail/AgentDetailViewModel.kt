@@ -12,6 +12,7 @@ import com.vibecode.companion.data.api.RunGit
 import com.vibecode.companion.data.api.RunStatus
 import com.vibecode.companion.data.api.RunStreamClient
 import com.vibecode.companion.data.api.RunStreamEvent
+import com.vibecode.companion.data.storage.PromptStore
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +25,8 @@ import java.io.IOException
 
 /** One rendered entry in the live run timeline. */
 sealed interface TimelineItem {
+    /** What the user asked this run to do (recalled from local PromptStore). */
+    data class UserPrompt(val text: String) : TimelineItem
     data class AssistantText(val text: String) : TimelineItem
     data class Thinking(val text: String) : TimelineItem
     data class Tool(
@@ -58,6 +61,10 @@ data class AgentDetailUiState(
     val isStreaming: Boolean = false,
     /** True after reconnect attempts are exhausted — UI shows a Reconnect button. */
     val showReconnect: Boolean = false,
+    /** Earlier run whose replayed history is displayed instead of the newest run's. */
+    val viewedPastRun: Run? = null,
+    /** True while a finished run's event history is replaying from the server. */
+    val isReplaying: Boolean = false,
     val followUpText: String = "",
     val isSending: Boolean = false,
     val isCancelling: Boolean = false,
@@ -76,6 +83,7 @@ data class AgentDetailUiState(
 class AgentDetailViewModel(
     private val apiClient: CursorApiClient,
     private val runStreamClient: RunStreamClient,
+    private val promptStore: PromptStore,
     private val agentId: String,
 ) : ViewModel() {
 
@@ -96,6 +104,15 @@ class AgentDetailViewModel(
     private enum class TextKind { ASSISTANT, THINKING }
 
     private var lastTextKind: TextKind? = null
+
+    /**
+     * Non-null while a finished run's history is replaying. Replays must not
+     * mutate live-run state: NEWEST suppresses status/lastEventId updates (the
+     * replayed events are historical), PAST additionally protects newestRun.
+     */
+    private enum class ReplayMode { NEWEST, PAST }
+
+    private var replayMode: ReplayMode? = null
 
     init {
         load(initial = true)
@@ -123,6 +140,24 @@ class AgentDetailViewModel(
         startStreaming(run.id)
     }
 
+    /** Replays the step-by-step history of an earlier run in place of the latest timeline. */
+    fun viewPastRun(run: Run) {
+        val state = _uiState.value
+        if (state.isReplaying && state.viewedPastRun?.id == run.id) return
+        replayRun(run, past = true)
+    }
+
+    /** Returns from a past-run view to the latest run (live stream or replayed history). */
+    fun viewLatest() {
+        val newest = _uiState.value.newestRun ?: return
+        if (_uiState.value.viewedPastRun == null) return
+        if (RunStatus.isTerminal(newest.status)) {
+            replayRun(newest, past = false)
+        } else {
+            startStreaming(newest.id)
+        }
+    }
+
     fun sendFollowUp() {
         val text = _uiState.value.followUpText.trim()
         if (text.isEmpty() || _uiState.value.isSending) return
@@ -132,6 +167,7 @@ class AgentDetailViewModel(
                 val run = apiClient.createRun(agentId, CreateRunRequest(prompt = PromptBody(text))).run
                 // A stale in-flight load must not overwrite the just-created run.
                 loadJob?.cancel()
+                promptStore.save(run.id, text)
                 lastEventId = null
                 lastTextKind = null
                 _uiState.update { state ->
@@ -141,7 +177,7 @@ class AgentDetailViewModel(
                         pastRuns = listOfNotNull(state.newestRun) + state.pastRuns,
                         newestRun = run,
                         liveRunStatus = run.status,
-                        timeline = emptyList(),
+                        timeline = listOf(TimelineItem.UserPrompt(text)),
                         showReconnect = false,
                     )
                 }
@@ -196,14 +232,9 @@ class AgentDetailViewModel(
                     lastEventId = null
                     lastTextKind = null
                 }
+                val seed = runChanged || _uiState.value.timeline.isEmpty()
+                val seedPrompt = if (seed && newest != null) promptStore.get(newest.id) else null
                 _uiState.update { state ->
-                    val seed = runChanged || state.timeline.isEmpty()
-                    val timeline = when {
-                        !seed -> state.timeline
-                        newest != null && RunStatus.isTerminal(newest.status) ->
-                            listOf(TimelineItem.ResultCard(newest.status, newest.result, newest.durationMs, newest.git))
-                        else -> emptyList()
-                    }
                     state.copy(
                         isLoading = false,
                         loadError = null,
@@ -211,14 +242,23 @@ class AgentDetailViewModel(
                         newestRun = newest,
                         pastRuns = runs.drop(1),
                         liveRunStatus = newest?.status,
-                        timeline = timeline,
+                        timeline = if (seed) {
+                            listOfNotNull(seedPrompt?.let { TimelineItem.UserPrompt(it) })
+                        } else {
+                            state.timeline
+                        },
+                        viewedPastRun = if (runChanged) null else state.viewedPastRun,
                     )
                 }
                 if (newest != null && !RunStatus.isTerminal(newest.status)) {
                     if (runChanged || streamJob?.isActive != true) startStreaming(newest.id)
-                } else {
+                } else if (newest != null && seed) {
+                    // Finished run: rebuild the step-by-step history by replaying
+                    // the server's retained event stream.
+                    replayRun(newest, past = false)
+                } else if (newest == null) {
                     streamJob?.cancel()
-                    _uiState.update { it.copy(isStreaming = false, showReconnect = false) }
+                    _uiState.update { it.copy(isStreaming = false, isReplaying = false, showReconnect = false) }
                 }
             } catch (ex: CursorApiException) {
                 reportLoadFailure(ex.message)
@@ -240,10 +280,67 @@ class AgentDetailViewModel(
 
     // ---- Streaming ----
 
+    /**
+     * Rebuilds a finished run's timeline by replaying its SSE stream from the
+     * beginning (no Last-Event-ID). The server retains run events for a
+     * retention window; past it the endpoint returns 410 `stream_expired` and
+     * we fall back to the final result card.
+     */
+    private fun replayRun(run: Run, past: Boolean) {
+        streamJob?.cancel()
+        replayMode = if (past) ReplayMode.PAST else ReplayMode.NEWEST
+        lastTextKind = null
+        streamJob = viewModelScope.launch {
+            val promptItem = promptStore.get(run.id)?.let { TimelineItem.UserPrompt(it) }
+            _uiState.update {
+                it.copy(
+                    isReplaying = true,
+                    isStreaming = false,
+                    showReconnect = false,
+                    viewedPastRun = if (past) run else null,
+                    timeline = listOfNotNull(promptItem),
+                )
+            }
+            var failure: RunStreamEvent.ConnectionClosed? = null
+            runStreamClient.streamRun(agentId, run.id).collect { event ->
+                if (event is RunStreamEvent.ConnectionClosed) failure = event
+                handleStreamEvent(event)
+            }
+            val closed = failure
+            val expired = closed != null && (
+                closed.httpCode == 410 || closed.httpCode == 400 ||
+                    closed.errorCode == "stream_expired" || closed.errorCode == "invalid_last_event_id"
+                )
+            val fallbackCard = TimelineItem.ResultCard(run.status, run.result, run.durationMs, run.git)
+            _uiState.update { state ->
+                when {
+                    closed == null -> state.copy(isReplaying = false)
+                    expired -> state.copy(
+                        isReplaying = false,
+                        timeline = listOfNotNull(promptItem, fallbackCard),
+                        transientMessage = "Step-by-step history has expired for this run — showing the final result. The full conversation is still on cursor.com.",
+                    )
+                    else -> state.copy(
+                        isReplaying = false,
+                        timeline = if (state.timeline.any { it is TimelineItem.ResultCard }) {
+                            state.timeline
+                        } else {
+                            state.timeline + fallbackCard
+                        },
+                        transientMessage = "Couldn't load the full history — check your connection.",
+                    )
+                }
+            }
+        }
+    }
+
     private fun startStreaming(runId: String) {
         streamJob?.cancel()
+        replayMode = null
         streamJob = viewModelScope.launch {
-            _uiState.update { it.copy(isStreaming = true, showReconnect = false) }
+            _uiState.update {
+                it.copy(isStreaming = true, isReplaying = false, showReconnect = false, viewedPastRun = null)
+            }
             var attempt = 0
             while (isActive) {
                 var sawDone = false
@@ -287,7 +384,11 @@ class AgentDetailViewModel(
     }
 
     private fun handleStreamEvent(event: RunStreamEvent) {
-        event.eventId?.let { lastEventId = it }
+        // Replayed events are historical — they must not move the live stream's
+        // resume cursor.
+        if (replayMode == null) {
+            event.eventId?.let { lastEventId = it }
+        }
         when (event) {
             is RunStreamEvent.Assistant -> appendText(TextKind.ASSISTANT, event.text)
 
@@ -323,23 +424,28 @@ class AgentDetailViewModel(
             }
 
             is RunStreamEvent.Status -> {
-                val status = event.status ?: return
-                _uiState.update { state ->
-                    state.copy(
-                        liveRunStatus = status,
-                        newestRun = state.newestRun?.copy(status = status),
-                    )
+                // Replays emit historical statuses (CREATING/RUNNING) — ignore them
+                // so a finished run doesn't flicker back to "active".
+                if (replayMode == null) {
+                    val status = event.status ?: return
+                    _uiState.update { state ->
+                        state.copy(
+                            liveRunStatus = status,
+                            newestRun = state.newestRun?.copy(status = status),
+                        )
+                    }
                 }
             }
 
             is RunStreamEvent.Result -> {
                 lastTextKind = null
+                val touchesNewestRun = replayMode != ReplayMode.PAST
                 _uiState.update { state ->
                     state.copy(
                         timeline = state.timeline +
                             TimelineItem.ResultCard(event.status, event.text, event.durationMs, event.git),
-                        liveRunStatus = event.status ?: state.liveRunStatus,
-                        newestRun = state.newestRun?.let { run ->
+                        liveRunStatus = if (touchesNewestRun) event.status ?: state.liveRunStatus else state.liveRunStatus,
+                        newestRun = if (!touchesNewestRun) state.newestRun else state.newestRun?.let { run ->
                             run.copy(
                                 status = event.status ?: run.status,
                                 result = event.text ?: run.result,
@@ -349,7 +455,7 @@ class AgentDetailViewModel(
                         },
                     )
                 }
-                refreshAgentOnly() // pick up git/PR state on the agent
+                if (replayMode == null) refreshAgentOnly() // pick up git/PR state on the agent
             }
 
             is RunStreamEvent.StreamError ->

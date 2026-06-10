@@ -77,10 +77,41 @@ fun RunStatusChip(status: String?, modifier: Modifier = Modifier) {
 @Composable
 fun TimelineItemView(item: TimelineItem, agentUrl: String?) {
     when (item) {
+        is TimelineItem.UserPrompt -> UserPromptBubble(item)
         is TimelineItem.AssistantText -> AssistantTextItem(item)
         is TimelineItem.Thinking -> ThinkingBlock(item)
         is TimelineItem.Tool -> ToolCallRow(item)
         is TimelineItem.ResultCard -> ResultCardView(item, agentUrl)
+    }
+}
+
+@Composable
+private fun UserPromptBubble(item: TimelineItem.UserPrompt) {
+    var expanded by remember { mutableStateOf(false) }
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text = "You",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Text(
+                text = item.text.trim(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                maxLines = if (expanded) Int.MAX_VALUE else 6,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -318,9 +349,12 @@ fun GitSection(branches: List<RunGitBranch>, agentUrl: String?, modifier: Modifi
     }
 }
 
-/** Compact collapsed card for a past (non-newest) run; tap to expand the result text. */
+/**
+ * Compact collapsed card for a past (non-newest) run; tap to expand the result
+ * text, [onViewSteps] replays the run's full step-by-step history.
+ */
 @Composable
-fun PastRunCard(run: Run, modifier: Modifier = Modifier) {
+fun PastRunCard(run: Run, modifier: Modifier = Modifier, onViewSteps: (() -> Unit)? = null) {
     var expanded by remember(run.id) { mutableStateOf(false) }
     Surface(
         shape = RoundedCornerShape(8.dp),
@@ -349,6 +383,12 @@ fun PastRunCard(run: Run, modifier: Modifier = Modifier) {
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                Spacer(Modifier.weight(1f))
+                if (onViewSteps != null) {
+                    TextButton(onClick = onViewSteps) {
+                        Text("View steps", style = MaterialTheme.typography.labelMedium)
+                    }
                 }
             }
             val result = run.result

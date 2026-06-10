@@ -10,6 +10,7 @@ import com.vibecode.companion.data.api.ModelListItem
 import com.vibecode.companion.data.api.ModelRef
 import com.vibecode.companion.data.api.PromptBody
 import com.vibecode.companion.data.api.RepoConfig
+import com.vibecode.companion.data.storage.PromptStore
 import com.vibecode.companion.data.storage.RepoCache
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,6 +44,7 @@ data class LaunchUiState(
 class LaunchViewModel(
     private val apiClient: CursorApiClient,
     private val repoCache: RepoCache,
+    private val promptStore: PromptStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LaunchUiState())
@@ -143,6 +145,9 @@ class LaunchViewModel(
                         mode = if (state.planMode) AgentMode.PLAN else AgentMode.AGENT,
                     ),
                 )
+                // Remember the prompt locally — the API never returns it, and the
+                // detail screen renders it at the top of the run timeline.
+                promptStore.save(response.run.id, state.prompt)
                 _uiState.update { it.copy(launching = false, launchedAgentId = response.agent.id) }
             } catch (ex: CursorApiException) {
                 val message = when (ex.code) {
