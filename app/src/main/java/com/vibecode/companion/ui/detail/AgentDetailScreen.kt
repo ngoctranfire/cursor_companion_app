@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vibecode.companion.data.api.RunGitBranch
 import com.vibecode.companion.data.api.RunStatus
@@ -69,6 +70,13 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+
+    // SSE only while visible — the stream pauses with the screen and resumes
+    // from the last seen event id.
+    LifecycleResumeEffect(Unit) {
+        vm.onScreenResumed()
+        onPauseOrDispose { vm.onScreenPaused() }
+    }
 
     LaunchedEffect(state.transientMessage) {
         val message = state.transientMessage ?: return@LaunchedEffect

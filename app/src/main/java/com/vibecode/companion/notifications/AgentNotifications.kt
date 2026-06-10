@@ -22,6 +22,13 @@ object AgentNotifications {
 
     const val CHANNEL_ID = "agent_status"
 
+    /**
+     * Fixed notification id — per-agent uniqueness comes from the notification
+     * tag (the agent id itself), not from String.hashCode(), which can collide
+     * across agents.
+     */
+    private const val RUN_TERMINAL_ID = 1
+
     fun ensureChannel(context: Context) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channel = NotificationChannel(
@@ -55,14 +62,18 @@ object AgentNotifications {
             if (prUrl != null) append(" — PR ready")
         }
 
-        // Class-name intent keeps this file decoupled from MainActivity.
+        // Class-name intent keeps this file decoupled from MainActivity. The data
+        // URI makes intents for different agents distinct under Intent.filterEquals
+        // (extras don't count), so the system never hands agent A's tap to agent
+        // B's PendingIntent — request codes alone can collide via hashCode.
         val contentIntent = Intent()
             .setClassName(context, "com.vibecode.companion.MainActivity")
+            .setData(Uri.fromParts("agent-companion", agentId, null))
             .putExtra("agentId", agentId)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val contentPending = PendingIntent.getActivity(
             context,
-            agentId.hashCode(),
+            0,
             contentIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
@@ -76,16 +87,17 @@ object AgentNotifications {
             .setAutoCancel(true)
 
         if (prUrl != null) {
+            // Distinct per PR via the ACTION_VIEW data URI — no request code needed.
             val prPending = PendingIntent.getActivity(
                 context,
-                agentId.hashCode() + 1,
+                0,
                 Intent(Intent.ACTION_VIEW, Uri.parse(prUrl)),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
             builder.addAction(0, "Open PR", prPending)
         }
 
-        NotificationManagerCompat.from(context).notify(agentId.hashCode(), builder.build())
+        NotificationManagerCompat.from(context).notify(agentId, RUN_TERMINAL_ID, builder.build())
     }
 
     private fun canNotify(context: Context): Boolean {

@@ -6,9 +6,11 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -30,23 +32,44 @@ class ApiKeyStore(private val context: Context) {
         private val PREF_ENCRYPTED_KEY = stringPreferencesKey("encrypted_api_key")
     }
 
+    /**
+     * Plaintext memoized per ciphertext blob, so the Keystore round-trip happens
+     * once per saved key instead of on every API call. Benign data race: writes
+     * for the same blob are idempotent. Save/clear change the blob, which
+     * invalidates the memo naturally.
+     */
+    @Volatile
+    private var lastDecrypted: Pair<String, String?>? = null
+
     /** Emits the decrypted API key, or null when not set (or undecryptable). */
     val apiKey: Flow<String?> = context.companionDataStore.data.map { prefs ->
-        prefs[PREF_ENCRYPTED_KEY]?.let { decrypt(it) }
+        prefs[PREF_ENCRYPTED_KEY]?.let { decryptCached(it) }
     }
 
     suspend fun get(): String? = apiKey.first()
 
     suspend fun save(rawKey: String) {
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateSecretKey())
-        val ciphertext = cipher.doFinal(rawKey.toByteArray(Charsets.UTF_8))
-        val blob = Base64.encodeToString(cipher.iv + ciphertext, Base64.NO_WRAP)
+        val blob = withContext(Dispatchers.IO) {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, getOrCreateSecretKey())
+            val ciphertext = cipher.doFinal(rawKey.toByteArray(Charsets.UTF_8))
+            Base64.encodeToString(cipher.iv + ciphertext, Base64.NO_WRAP)
+        }
         context.companionDataStore.edit { it[PREF_ENCRYPTED_KEY] = blob }
+        lastDecrypted = blob to rawKey
     }
 
     suspend fun clear() {
         context.companionDataStore.edit { it.remove(PREF_ENCRYPTED_KEY) }
+    }
+
+    private suspend fun decryptCached(blob: String): String? {
+        lastDecrypted?.let { (cachedBlob, plain) -> if (cachedBlob == blob) return plain }
+        // Keystore ops are binder IPC + crypto — keep them off the caller's
+        // thread (this flow is collected from main-dispatched coroutines).
+        val plain = withContext(Dispatchers.IO) { decrypt(blob) }
+        lastDecrypted = blob to plain
+        return plain
     }
 
     private fun decrypt(blob: String): String? = try {
