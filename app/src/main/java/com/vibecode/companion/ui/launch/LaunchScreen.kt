@@ -1,5 +1,7 @@
 package com.vibecode.companion.ui.launch
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,12 +15,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -26,19 +32,22 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,11 +56,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vibecode.companion.data.api.ModelListItem
 import com.vibecode.companion.ui.common.companionViewModel
 import com.vibecode.companion.ui.common.relativeTime
+import com.vibecode.companion.ui.theme.GradientButton
 import java.time.Instant
 
 /** "owner/name" from a GitHub URL — keeps the picker compact. */
@@ -91,9 +104,14 @@ fun LaunchScreen(onLaunched: (agentId: String) -> Unit, onBack: () -> Unit) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                ),
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -101,97 +119,301 @@ fun LaunchScreen(onLaunched: (agentId: String) -> Unit, onBack: () -> Unit) {
                 .padding(innerPadding)
                 .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
-            RepoSelector(
+            PromptHeroCard(
+                prompt = state.prompt,
+                onPromptChange = vm::setPrompt,
+                onVoiceResult = vm::appendVoiceText,
+            )
+
+            ConfigurationSection(
                 repoUrls = state.repoUrls,
                 selectedRepo = state.selectedRepo,
-                loading = state.reposLoading,
-                error = state.repoError,
-                fetchedAtEpochMs = state.repoFetchedAtEpochMs,
-                onSelect = vm::selectRepo,
-                onRefresh = vm::refreshRepos,
-            )
-
-            Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
-                    value = state.prompt,
-                    onValueChange = vm::setPrompt,
-                    label = { Text("What should the agent do?") },
-                    minLines = 4,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                VoiceInputButton(
-                    onResult = vm::appendVoiceText,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(4.dp),
-                )
-            }
-
-            ModelSelector(
+                reposLoading = state.reposLoading,
+                repoError = state.repoError,
+                repoFetchedAtEpochMs = state.repoFetchedAtEpochMs,
+                onSelectRepo = vm::selectRepo,
+                onRefreshRepos = vm::refreshRepos,
                 models = state.models,
                 selectedModelId = state.selectedModelId,
-                onSelect = vm::selectModel,
+                onSelectModel = vm::selectModel,
             )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "Create PR when done",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                Switch(checked = state.autoCreatePr, onCheckedChange = vm::setAutoCreatePr)
-            }
+            OptionsSection(
+                autoCreatePr = state.autoCreatePr,
+                onAutoCreatePrChange = vm::setAutoCreatePr,
+                planMode = state.planMode,
+                onPlanModeChange = vm::setPlanMode,
+            )
 
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                SegmentedButton(
-                    selected = !state.planMode,
-                    onClick = { vm.setPlanMode(false) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                ) {
-                    Text("Agent")
-                }
-                SegmentedButton(
-                    selected = state.planMode,
-                    onClick = { vm.setPlanMode(true) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                ) {
-                    Text("Plan")
-                }
-            }
-
-            Button(
+            GradientButton(
+                text = if (state.launching) "Launching…" else "Launch agent",
                 onClick = vm::launch,
                 enabled = state.canLaunch,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-            ) {
-                if (state.launching) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color = LocalContentColor.current,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text("Launching…")
-                } else {
+                loading = state.launching,
+                leading = {
                     Icon(
                         Icons.AutoMirrored.Filled.Send,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
                     )
-                    Spacer(Modifier.width(10.dp))
-                    Text("Launch agent")
+                },
+            )
+
+            Spacer(Modifier.height(4.dp))
+        }
+    }
+}
+
+/** Section label: small, uppercase, muted — anchors each block of controls. */
+@Composable
+private fun SectionLabel(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier,
+    )
+}
+
+/**
+ * The hero: a large, prominent prompt area inside an elevated card with the mic
+ * tucked into the bottom-right. This is the "tell the agent what to do" moment.
+ */
+@Composable
+private fun PromptHeroCard(
+    prompt: String,
+    onPromptChange: (String) -> Unit,
+    onVoiceResult: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Bolt,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "New task",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(modifier = Modifier.padding(top = 6.dp, bottom = 6.dp)) {
+                OutlinedTextField(
+                    value = prompt,
+                    onValueChange = onPromptChange,
+                    placeholder = {
+                        Text(
+                            "What should the agent do?",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    textStyle = MaterialTheme.typography.titleMedium,
+                    minLines = 5,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        disabledBorderColor = Color.Transparent,
+                        errorBorderColor = Color.Transparent,
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Tap the mic to dictate",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    VoiceInputButton(onResult = onVoiceResult)
                 }
             }
+        }
+    }
+}
 
-            Spacer(Modifier.height(8.dp))
+/**
+ * Compact configuration block: the repo and model selectors live together in a
+ * single tonal card under a section header.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConfigurationSection(
+    repoUrls: List<String>,
+    selectedRepo: String?,
+    reposLoading: Boolean,
+    repoError: String?,
+    repoFetchedAtEpochMs: Long?,
+    onSelectRepo: (String) -> Unit,
+    onRefreshRepos: () -> Unit,
+    models: List<ModelListItem>,
+    selectedModelId: String?,
+    onSelectModel: (String?) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.Tune,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            SectionLabel("Configuration")
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                RepoSelector(
+                    repoUrls = repoUrls,
+                    selectedRepo = selectedRepo,
+                    loading = reposLoading,
+                    error = repoError,
+                    fetchedAtEpochMs = repoFetchedAtEpochMs,
+                    onSelect = onSelectRepo,
+                    onRefresh = onRefreshRepos,
+                )
+                ModelSelector(
+                    models = models,
+                    selectedModelId = selectedModelId,
+                    onSelect = onSelectModel,
+                )
+            }
+        }
+    }
+}
+
+/** Toggles: PR-on-done switch and the Agent/Plan mode picker, cleanly labeled. */
+@Composable
+private fun OptionsSection(
+    autoCreatePr: Boolean,
+    onAutoCreatePrChange: (Boolean) -> Unit,
+    planMode: Boolean,
+    onPlanModeChange: (Boolean) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.CallSplit,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Create PR when done",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "Open a pull request with the agent's changes",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = autoCreatePr,
+                    onCheckedChange = onAutoCreatePrChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                        checkedTrackColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
+            }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SectionLabel("Mode")
+            ModePicker(planMode = planMode, onPlanModeChange = onPlanModeChange)
+        }
+    }
+}
+
+@Composable
+private fun ModePicker(planMode: Boolean, onPlanModeChange: (Boolean) -> Unit) {
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        SegmentedButton(
+            selected = !planMode,
+            onClick = { onPlanModeChange(false) },
+            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+            icon = {},
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.Bolt,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("Agent")
+            }
+        }
+        SegmentedButton(
+            selected = planMode,
+            onClick = { onPlanModeChange(true) },
+            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+            icon = {},
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.AccountTree,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("Plan")
+            }
         }
     }
 }
@@ -209,69 +431,87 @@ private fun RepoSelector(
 ) {
     var expanded by remember { mutableStateOf(false) }
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = { expanded = it },
-            modifier = Modifier.weight(1f),
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SectionLabel("Repository")
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedTextField(
-                value = selectedRepo?.let(::repoDisplayName) ?: "",
-                onValueChange = {},
-                readOnly = true,
-                singleLine = true,
-                label = { Text("Repository") },
-                placeholder = { Text("Select a repository") },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                isError = error != null,
-                supportingText = {
-                    when {
-                        error != null -> Text(error)
-                        loading -> Text("Fetching repositories — this can take a while…")
-                        fetchedAtEpochMs != null ->
-                            Text("Updated " + relativeTime(Instant.ofEpochMilli(fetchedAtEpochMs).toString()))
-                    }
-                },
-                modifier = Modifier
-                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                    .fillMaxWidth(),
-            )
-            ExposedDropdownMenu(
+            ExposedDropdownMenuBox(
                 expanded = expanded,
-                onDismissRequest = { expanded = false },
+                onExpandedChange = { expanded = it },
+                modifier = Modifier.weight(1f),
             ) {
-                if (repoUrls.isEmpty()) {
-                    DropdownMenuItem(
-                        text = { Text(if (loading) "Loading repositories…" else "No repositories — tap refresh") },
-                        onClick = { expanded = false },
-                        enabled = false,
-                    )
-                }
-                repoUrls.forEach { url ->
-                    DropdownMenuItem(
-                        text = { Text(repoDisplayName(url)) },
-                        onClick = {
-                            onSelect(url)
-                            expanded = false
-                        },
-                    )
+                OutlinedTextField(
+                    value = selectedRepo?.let(::repoDisplayName) ?: "",
+                    onValueChange = {},
+                    readOnly = true,
+                    singleLine = true,
+                    placeholder = { Text("Select a repository") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    isError = error != null,
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    ),
+                    supportingText = {
+                        when {
+                            error != null -> Text(error)
+                            loading -> Text("Fetching repositories — this can take a while…")
+                            fetchedAtEpochMs != null ->
+                                Text("Updated " + relativeTime(Instant.ofEpochMilli(fetchedAtEpochMs).toString()))
+                        }
+                    },
+                    modifier = Modifier
+                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                        .fillMaxWidth(),
+                )
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    if (repoUrls.isEmpty()) {
+                        DropdownMenuItem(
+                            text = { Text(if (loading) "Loading repositories…" else "No repositories — tap refresh") },
+                            onClick = { expanded = false },
+                            enabled = false,
+                        )
+                    }
+                    repoUrls.forEach { url ->
+                        DropdownMenuItem(
+                            text = { Text(repoDisplayName(url)) },
+                            onClick = {
+                                onSelect(url)
+                                expanded = false
+                            },
+                        )
+                    }
                 }
             }
-        }
 
-        if (loading) {
-            CircularProgressIndicator(
-                modifier = Modifier
-                    .padding(12.dp)
-                    .size(24.dp),
-                strokeWidth = 2.dp,
-            )
-        } else {
-            IconButton(onClick = onRefresh) {
-                Icon(Icons.Default.Refresh, contentDescription = "Refresh repositories")
+            Spacer(Modifier.width(4.dp))
+            if (loading) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .padding(12.dp)
+                        .size(22.dp),
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    IconButton(onClick = onRefresh) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "Refresh repositories",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
             }
         }
     }
@@ -287,41 +527,48 @@ private fun ModelSelector(
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = models.firstOrNull { it.id == selectedModelId }?.displayName ?: "Default"
 
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        OutlinedTextField(
-            value = selectedLabel,
-            onValueChange = {},
-            readOnly = true,
-            singleLine = true,
-            label = { Text("Model") },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier
-                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                .fillMaxWidth(),
-        )
-        ExposedDropdownMenu(
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SectionLabel("Model")
+        ExposedDropdownMenuBox(
             expanded = expanded,
-            onDismissRequest = { expanded = false },
+            onExpandedChange = { expanded = it },
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            DropdownMenuItem(
-                text = { Text("Default") },
-                onClick = {
-                    onSelect(null)
-                    expanded = false
-                },
+            OutlinedTextField(
+                value = selectedLabel,
+                onValueChange = {},
+                readOnly = true,
+                singleLine = true,
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                ),
+                modifier = Modifier
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                    .fillMaxWidth(),
             )
-            models.forEach { model ->
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
                 DropdownMenuItem(
-                    text = { Text(model.displayName) },
+                    text = { Text("Default") },
                     onClick = {
-                        onSelect(model.id)
+                        onSelect(null)
                         expanded = false
                     },
                 )
+                models.forEach { model ->
+                    DropdownMenuItem(
+                        text = { Text(model.displayName) },
+                        onClick = {
+                            onSelect(model.id)
+                            expanded = false
+                        },
+                    )
+                }
             }
         }
     }

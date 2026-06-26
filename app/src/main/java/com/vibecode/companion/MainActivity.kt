@@ -1,7 +1,9 @@
 package com.vibecode.companion
 
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,7 +16,12 @@ import com.vibecode.companion.ui.theme.CompanionTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // Dark-first UI: keep system bar icons light over the ink canvas
+        // regardless of the device's light/dark setting.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
         // Set by status notifications (see AgentNotifications) to deep-link into a run.
         // Only honored on fresh launches — recreations (rotation/theme change) restore
         // their own nav state and must not re-trigger the deep link.

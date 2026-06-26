@@ -3,7 +3,10 @@ package com.vibecode.companion.ui.onboarding
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,18 +18,18 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -49,6 +52,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vibecode.companion.ui.common.companionViewModel
+import com.vibecode.companion.ui.theme.BrandMark
+import com.vibecode.companion.ui.theme.GradientButton
+import com.vibecode.companion.ui.theme.OutlineActionButton
+import com.vibecode.companion.ui.theme.brandGlow
 import kotlinx.coroutines.delay
 
 /**
@@ -85,94 +92,112 @@ fun OnboardingScreen(onConnected: () -> Unit) {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Hero
-            Text(
-                text = "Agent Companion",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "Steer your Cursor cloud agents from anywhere",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.primary,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = "Create an API key at cursor.com/dashboard → API Keys, then paste it below. " +
-                    "Cloud Agents require a paid Cursor plan with usage-based billing enabled.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
+            // Hero — brand mark floating on a soft radial glow.
+            Box(contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .size(220.dp)
+                        .background(brandGlow(alpha = 0.22f)),
+                )
+                BrandMark(size = 72.dp)
+            }
 
             Spacer(Modifier.height(28.dp))
 
-            OutlinedTextField(
-                value = state.key,
-                onValueChange = vm::onKeyChanged,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("API key") },
-                placeholder = { Text("crsr_...", fontFamily = FontFamily.Monospace) },
-                singleLine = true,
-                enabled = !state.isValidating && state.connectedInfo == null,
-                isError = state.error != null,
-                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
-                visualTransformation = if (keyVisible) {
-                    VisualTransformation.None
-                } else {
-                    PasswordVisualTransformation()
-                },
-                trailingIcon = {
-                    TextButton(onClick = { keyVisible = !keyVisible }) {
-                        Text(
-                            text = if (keyVisible) "Hide" else "Show",
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                    }
-                },
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Password,
-                    imeAction = ImeAction.Done,
-                ),
-                keyboardActions = KeyboardActions(onDone = { vm.connect() }),
+            Text(
+                text = "Agent Companion",
+                style = MaterialTheme.typography.displaySmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Steer your Cursor cloud agents from anywhere",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.secondary,
+                textAlign = TextAlign.Center,
             )
 
-            if (state.error != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = state.error.orEmpty(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            Spacer(Modifier.height(32.dp))
 
-            Spacer(Modifier.height(20.dp))
-
-            Button(
-                onClick = vm::connect,
-                enabled = state.canConnect,
+            // API-key entry panel — a contained, elevated card.
+            Surface(
                 modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
-                if (state.isValidating) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary,
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text(
+                        text = "Create an API key at cursor.com/dashboard → API Keys, then paste it below. " +
+                            "Cloud Agents require a paid Cursor plan with usage-based billing enabled.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.width(10.dp))
-                    Text("Validating…")
-                } else {
-                    Text("Connect")
+
+                    Spacer(Modifier.height(20.dp))
+
+                    OutlinedTextField(
+                        value = state.key,
+                        onValueChange = vm::onKeyChanged,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("API key") },
+                        placeholder = { Text("crsr_...", fontFamily = FontFamily.Monospace) },
+                        singleLine = true,
+                        enabled = !state.isValidating && state.connectedInfo == null,
+                        isError = state.error != null,
+                        shape = RoundedCornerShape(14.dp),
+                        textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        ),
+                        visualTransformation = if (keyVisible) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        trailingIcon = {
+                            TextButton(onClick = { keyVisible = !keyVisible }) {
+                                Text(
+                                    text = if (keyVisible) "Hide" else "Show",
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done,
+                        ),
+                        keyboardActions = KeyboardActions(onDone = { vm.connect() }),
+                    )
+
+                    if (state.error != null) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = state.error.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+
+                    Spacer(Modifier.height(20.dp))
+
+                    GradientButton(
+                        text = "Connect",
+                        onClick = vm::connect,
+                        enabled = state.canConnect,
+                        loading = state.isValidating,
+                    )
                 }
             }
 
             val info = state.connectedInfo
             if (info != null) {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(20.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.Check,
@@ -185,14 +210,16 @@ fun OnboardingScreen(onConnected: () -> Unit) {
                     Text(
                         text = if (who != null) "Connected — welcome, $who" else "Connected",
                         style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.secondary,
                     )
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(20.dp))
 
-            TextButton(
+            OutlineActionButton(
+                text = "Open Cursor Dashboard",
                 onClick = {
                     try {
                         context.startActivity(
@@ -202,15 +229,14 @@ fun OnboardingScreen(onConnected: () -> Unit) {
                         // No browser installed — nothing sensible to do in a sample app.
                     }
                 },
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text("Open Cursor Dashboard")
-            }
+                leading = {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                },
+            )
         }
     }
 }

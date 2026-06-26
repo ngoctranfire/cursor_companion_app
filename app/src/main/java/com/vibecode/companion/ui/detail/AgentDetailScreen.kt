@@ -1,5 +1,9 @@
 package com.vibecode.companion.ui.detail
 
+import android.content.Intent
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,14 +24,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import android.content.Intent
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,7 +48,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,9 +58,14 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vibecode.companion.data.api.RunGitBranch
 import com.vibecode.companion.data.api.RunStatus
+import com.vibecode.companion.ui.common.StatusDot
+import com.vibecode.companion.ui.common.StatusPill
 import com.vibecode.companion.ui.common.companionViewModel
 import com.vibecode.companion.ui.common.formatDuration
 import com.vibecode.companion.ui.common.relativeTime
+import com.vibecode.companion.ui.theme.BrandGradient
+import com.vibecode.companion.ui.theme.GradientButton
+import com.vibecode.companion.ui.theme.runStatusColor
 
 /**
  * Agent detail: live run timeline over SSE, past runs, git/PR links, and a
@@ -90,10 +100,11 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(
                             text = state.agent?.name ?: "Agent",
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -103,16 +114,21 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                RunStatusChip(state.liveRunStatus)
+                                StatusPill(state.liveRunStatus)
                                 Text(
                                     text = relativeTime(newest.updatedAt),
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 if (RunStatus.isTerminal(state.liveRunStatus) && newest.durationMs != null) {
                                     Text(
+                                        text = "·",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
                                         text = formatDuration(newest.durationMs),
-                                        style = MaterialTheme.typography.labelSmall,
+                                        style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
@@ -181,14 +197,19 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("Couldn't load agent", style = MaterialTheme.typography.titleMedium)
+                Text("Couldn't load agent", style = MaterialTheme.typography.headlineSmall)
                 Text(
                     text = loadError,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
-                Button(onClick = vm::retryLoad) { Text("Retry") }
+                Spacer(Modifier.height(4.dp))
+                GradientButton(
+                    text = "Retry",
+                    onClick = vm::retryLoad,
+                    modifier = Modifier.width(200.dp),
+                )
             }
 
             else -> DetailBody(
@@ -246,17 +267,21 @@ private fun DetailBody(
         if (viewedPast != null) {
             item(key = "past_banner") {
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .animateItem(),
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+                        modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
                     ) {
                         Text(
                             text = "Viewing earlier run · ${relativeTime(viewedPast.updatedAt)}",
                             style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.weight(1f),
                         )
@@ -277,22 +302,35 @@ private fun DetailBody(
         }
 
         items(state.timeline) { timelineItem ->
-            TimelineItemView(timelineItem, state.agent?.url)
+            Box(modifier = Modifier.animateItem()) {
+                TimelineItemView(timelineItem, state.agent?.url)
+            }
         }
 
         if (state.isStreaming || state.isReplaying) {
             item(key = "live") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
-                    Spacer(Modifier.width(8.dp))
+                val liveColor = if (state.isReplaying) {
+                    MaterialTheme.colorScheme.secondary
+                } else {
+                    runStatusColor(state.liveRunStatus)
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .animateItem()
+                        .padding(vertical = 4.dp),
+                ) {
+                    StatusDot(color = liveColor, active = true, size = 10.dp)
+                    Spacer(Modifier.width(10.dp))
                     Text(
                         text = when {
                             state.isReplaying -> "Replaying history…"
                             state.timeline.isEmpty() -> "Waiting for events…"
                             else -> "Live"
                         },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = liveColor,
                     )
                 }
             }
@@ -301,21 +339,27 @@ private fun DetailBody(
         if (state.showReconnect) {
             item(key = "reconnect") {
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
-                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .animateItem(),
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
                     ) {
                         Text(
                             text = "Connection lost",
                             style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = onReconnect) { Text("Reconnect") }
+                        TextButton(onClick = onReconnect) {
+                            Text("Reconnect", color = MaterialTheme.colorScheme.error)
+                        }
                     }
                 }
             }
@@ -332,13 +376,16 @@ private fun DetailBody(
         if (branches.isNotEmpty() || agentUrl != null) {
             item(key = "git") {
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .animateItem(),
                 ) {
                     Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         SectionHeader("Branches & PRs")
                         GitSection(branches = branches, agentUrl = agentUrl)
@@ -360,7 +407,9 @@ private fun SectionHeader(label: String) {
     Text(
         text = label.uppercase(),
         style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 2.dp),
     )
 }
 
@@ -372,40 +421,59 @@ private fun FollowUpComposer(
     isSending: Boolean,
 ) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .imePadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = onTextChange,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Send a follow-up…") },
-                textStyle = MaterialTheme.typography.bodyMedium,
-                shape = RoundedCornerShape(12.dp),
-                maxLines = 4,
-            )
-            Spacer(Modifier.width(8.dp))
-            IconButton(
-                onClick = onSend,
-                enabled = text.isNotBlank() && !isSending,
+        Column(Modifier.fillMaxWidth()) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.Bottom,
             ) {
-                if (isSending) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send follow-up",
-                        tint = if (text.isNotBlank()) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Send a follow-up…") },
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    shape = RoundedCornerShape(16.dp),
+                    maxLines = 4,
+                )
+                Spacer(Modifier.width(10.dp))
+                val sendEnabled = text.isNotBlank() && !isSending
+                Box(
+                    modifier = Modifier
+                        .padding(bottom = 4.dp)
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(
+                            if (sendEnabled) BrandGradient
+                            else androidx.compose.ui.graphics.SolidColor(
+                                MaterialTheme.colorScheme.surfaceVariant,
+                            ),
+                        )
+                        .clickable(enabled = sendEnabled, onClick = onSend),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (isSending) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send follow-up",
+                            tint = if (sendEnabled) {
+                                androidx.compose.ui.graphics.Color.White
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
         }
