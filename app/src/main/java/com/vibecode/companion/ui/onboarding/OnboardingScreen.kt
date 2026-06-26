@@ -10,8 +10,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -76,8 +76,11 @@ fun OnboardingScreen(onConnected: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                // Edge-to-edge: no Scaffold here, so keep content out of the
+                // status bar / cutout / IME ourselves (safeDrawing covers all
+                // three — before the scroll so the viewport shrinks with them).
+                .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
-                .imePadding()
                 .padding(horizontal = 24.dp, vertical = 32.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,

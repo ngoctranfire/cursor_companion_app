@@ -12,6 +12,7 @@ import com.vibecode.companion.data.api.Run
 import com.vibecode.companion.data.api.RunStatus
 import com.vibecode.companion.data.storage.companionDataStore
 import com.vibecode.companion.notifications.AgentNotifications
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -37,6 +38,7 @@ class AgentPollWorker(
         val PREF_LAST_POLL_COMPLETED_AT = longPreferencesKey("last_poll_completed_at")
         val STATUS_MAP_SERIALIZER = MapSerializer(String.serializer(), String.serializer())
         const val MAX_RUN_FETCHES = 5
+        const val MAX_ATTEMPTS = 3
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -97,8 +99,14 @@ class AgentPollWorker(
 
             writePollState(current)
             Result.success()
+        } catch (ex: CancellationException) {
+            // WorkManager cancelled us (or the process is going down) — never
+            // swallow this, structured concurrency depends on it propagating.
+            throw ex
         } catch (_: Exception) {
-            Result.retry()
+            // Periodic work: a few backoff retries, then wait for the next
+            // 15-minute slot instead of hammering a persistent failure.
+            if (runAttemptCount >= MAX_ATTEMPTS - 1) Result.failure() else Result.retry()
         }
     }
 

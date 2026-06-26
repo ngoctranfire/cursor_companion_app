@@ -114,8 +114,48 @@ class AgentDetailViewModel(
 
     private var replayMode: ReplayMode? = null
 
+    /** What [onScreenPaused] interrupted, so [onScreenResumed] can restore it. */
+    private enum class PausedWork { STREAM, REPLAY_NEWEST, REPLAY_PAST }
+
+    private var pausedWork: PausedWork? = null
+
     init {
         load(initial = true)
+    }
+
+    /**
+     * Stops SSE work while the screen isn't visible — an open socket plus the
+     * reconnect/backoff loop shouldn't burn battery from the background.
+     */
+    fun onScreenPaused() {
+        if (streamJob?.isActive != true) return
+        pausedWork = when (replayMode) {
+            ReplayMode.PAST -> PausedWork.REPLAY_PAST
+            ReplayMode.NEWEST -> PausedWork.REPLAY_NEWEST
+            null -> PausedWork.STREAM
+        }
+        streamJob?.cancel()
+        _uiState.update { it.copy(isStreaming = false, isReplaying = false) }
+    }
+
+    /**
+     * Restores whatever [onScreenPaused] interrupted: a live stream resumes from
+     * the last seen event id (the gap replays server-side); an interrupted
+     * history replay restarts from scratch (it rebuilds the timeline anyway).
+     * No-op on first composition or when nothing was paused.
+     */
+    fun onScreenResumed() {
+        val resumed = pausedWork ?: return
+        pausedWork = null
+        val state = _uiState.value
+        when (resumed) {
+            PausedWork.STREAM -> {
+                val newest = state.newestRun ?: return
+                if (!RunStatus.isTerminal(state.liveRunStatus)) startStreaming(newest.id)
+            }
+            PausedWork.REPLAY_NEWEST -> state.newestRun?.let { replayRun(it, past = false) }
+            PausedWork.REPLAY_PAST -> state.viewedPastRun?.let { replayRun(it, past = true) }
+        }
     }
 
     fun retryLoad() = load(initial = true)

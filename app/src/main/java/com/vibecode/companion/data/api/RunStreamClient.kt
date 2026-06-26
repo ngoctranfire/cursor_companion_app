@@ -1,7 +1,9 @@
 package com.vibecode.companion.data.api
 
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -128,6 +130,10 @@ class RunStreamClient(
 
             awaitClose { source.cancel() }
         }
+            // History replay arrives as a burst on OkHttp's thread; the default
+            // 64-slot channel would silently drop events past it (trySend is
+            // unchecked). buffer() fuses into the callbackFlow's own channel.
+            .buffer(Channel.UNLIMITED)
 
     private fun parseEvent(id: String?, type: String?, data: String): RunStreamEvent {
         val obj: JsonObject? = try {

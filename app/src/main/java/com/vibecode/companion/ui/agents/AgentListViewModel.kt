@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import com.vibecode.companion.data.api.CloudAgent
 import com.vibecode.companion.data.api.CursorApiClient
 import com.vibecode.companion.data.api.CursorApiException
-import com.vibecode.companion.data.storage.ApiKeyStore
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,7 +26,7 @@ data class AgentListUiState(
 
 class AgentListViewModel(
     private val apiClient: CursorApiClient,
-    private val apiKeyStore: ApiKeyStore,
+    private val clearAccountData: suspend () -> Unit,
 ) : ViewModel() {
 
     private companion object {
@@ -40,15 +39,33 @@ class AgentListViewModel(
     private var firstPageJob: Job? = null
     private var loadMoreJob: Job? = null
 
+    /**
+     * Agents archived this session. Page results are filtered against this so an
+     * archive can't be undone visually by a refresh that was already in flight
+     * when the archive call landed.
+     */
+    private val archivedIds = mutableSetOf<String>()
+
     init {
         loadFirstPage(fullScreen = true)
     }
 
-    /** Silent reload of page one — used by the toolbar action, pull-to-refresh, and on resume. */
+    /** Silent reload of page one — used by the toolbar action and pull-to-refresh. */
     fun refresh() {
         val state = _uiState.value
         if (state.isRefreshing || firstPageJob?.isActive == true) return
         loadFirstPage(fullScreen = false)
+    }
+
+    /**
+     * Silent page-one refresh on lifecycle resume. Unlike [refresh], pages the
+     * user already loaded are kept (merged behind the fresh first page) so
+     * returning from the detail screen doesn't throw away their pagination.
+     */
+    fun refreshOnResume() {
+        val state = _uiState.value
+        if (state.isRefreshing || firstPageJob?.isActive == true) return
+        loadFirstPage(fullScreen = false, preserveLoadedPages = true)
     }
 
     /** Full-screen reload — used by the error state's Retry button. */
@@ -68,7 +85,9 @@ class AgentListViewModel(
                 val page = apiClient.listAgents(limit = PAGE_SIZE, cursor = cursor)
                 _uiState.update { current ->
                     current.copy(
-                        items = (current.items + page.items).distinctBy { it.id },
+                        items = (current.items + page.items)
+                            .distinctBy { it.id }
+                            .filterNot { it.id in archivedIds },
                         nextCursor = page.nextCursor,
                         isLoadingMore = false,
                     )
@@ -85,6 +104,7 @@ class AgentListViewModel(
         viewModelScope.launch {
             try {
                 apiClient.archiveAgent(agentId)
+                archivedIds += agentId
                 _uiState.update { current ->
                     current.copy(
                         items = current.items.filterNot { it.id == agentId },
@@ -101,7 +121,7 @@ class AgentListViewModel(
 
     fun signOut(onSignedOut: () -> Unit) {
         viewModelScope.launch {
-            apiKeyStore.clear()
+            clearAccountData()
             onSignedOut()
         }
     }
@@ -110,7 +130,7 @@ class AgentListViewModel(
         _uiState.update { it.copy(snackbarMessage = null) }
     }
 
-    private fun loadFirstPage(fullScreen: Boolean) {
+    private fun loadFirstPage(fullScreen: Boolean, preserveLoadedPages: Boolean = false) {
         loadMoreJob?.cancel()
         firstPageJob?.cancel()
         firstPageJob = viewModelScope.launch {
@@ -124,10 +144,15 @@ class AgentListViewModel(
             }
             try {
                 val page = apiClient.listAgents(limit = PAGE_SIZE)
-                _uiState.update {
-                    it.copy(
-                        items = page.items,
-                        nextCursor = page.nextCursor,
+                _uiState.update { current ->
+                    val merge = preserveLoadedPages && current.items.isNotEmpty()
+                    current.copy(
+                        items = (if (merge) page.items + current.items else page.items)
+                            .distinctBy { it.id }
+                            .filterNot { it.id in archivedIds },
+                        // When merging, the old cursor still points past the deepest
+                        // loaded page; the fresh one would rewind "Load more" to page two.
+                        nextCursor = if (merge) current.nextCursor else page.nextCursor,
                         isLoading = false,
                         isRefreshing = false,
                         error = null,

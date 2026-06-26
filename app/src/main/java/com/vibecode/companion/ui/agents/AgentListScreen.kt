@@ -65,13 +65,13 @@ fun AgentListScreen(
     onSignOut: () -> Unit,
 ) {
     val vm = companionViewModel { container ->
-        AgentListViewModel(container.apiClient, container.apiKeyStore)
+        AgentListViewModel(container.apiClient, container::clearAccountData)
     }
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LifecycleResumeEffect(Unit) {
-        vm.refresh()
+        vm.refreshOnResume()
         onPauseOrDispose { }
     }
 
