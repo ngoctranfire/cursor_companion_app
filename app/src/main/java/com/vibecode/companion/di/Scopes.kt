@@ -19,7 +19,7 @@ import dev.zacsweers.metro.Qualifier
 /** Per signed-in account. Account-bound data (key, repo cache, prompts) moves here when per-account lands. */
 abstract class AccountScope private constructor()
 
-/** Per agent run / session — holds the runtime `agentId` and session-lifetime state. */
+/** Per agent / session — holds the runtime `agentId` and session-lifetime state. */
 abstract class SessionScope private constructor()
 
 /**
