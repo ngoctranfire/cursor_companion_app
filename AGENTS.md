@@ -15,11 +15,22 @@ Every PR is reviewed by **CodeRabbit** before a human merges. A green build is
    walkthrough/summary plus inline **actionable comments**.
 2. **Give it time — wait ~15–20 min** for the full pass to land before acting.
    Don't start working off a partial review.
-3. **Address the comments, then push.** CodeRabbit is **incremental** — each push
-   re-reviews only the new changes, so keep pushing fixes and re-reading its
-   feedback. Resolve or reply to every thread.
+3. **Reply to every CodeRabbit comment — never silently ignore one.** Each
+   comment must end with an explicit determination, so a real bug can't hide in an
+   unread thread:
+   - If it's valid, **fix it and push.** CodeRabbit is **incremental** — each push
+     re-reviews only the new changes, so keep pushing fixes and re-reading its
+     feedback.
+   - If you believe it's a **non-issue or won't cause a problem**, don't just close
+     it — **reply on the thread with `@coderabbitai` explaining why** (wrong
+     assumption, intentional design, already handled elsewhere). It will respond
+     and, if convinced, acknowledge/resolve; if it pushes back, it may have caught
+     something real — reconsider before dismissing.
+   Confirm each comment is either fixed or has a recorded reason it's safe before
+   moving on.
 4. **Loop until CodeRabbit is clean** — i.e. it reports **no actionable comments**
-   ("good to go"). Don't merge while actionable items are open.
+   ("good to go") and every thread is resolved. Don't merge while actionable items
+   or unanswered comments are open.
 5. **Human merges.** Once CodeRabbit is satisfied and the human has reviewed,
    **the human** merges — agents never merge.
 
