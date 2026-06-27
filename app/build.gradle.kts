@@ -3,7 +3,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -59,8 +58,10 @@ android {
     }
 }
 
-// AGP 9.0 removed the android.kotlinOptions DSL; configure the Kotlin compiler
-// through the Kotlin Gradle plugin's own compilerOptions block instead.
+// AGP 9 built-in Kotlin registers the standard `kotlin` extension; configure the
+// compiler through its compilerOptions block (the old android.kotlinOptions DSL is
+// gone). jvmTarget would otherwise default to compileOptions.targetCompatibility; we
+// pin it explicitly to keep the two in lockstep.
 kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_11

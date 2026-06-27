@@ -18,9 +18,12 @@ See PLAN.md for vision, decisions, and milestones.
 - Toolchain: Gradle 9.1.0 / AGP 9.0.1 / Kotlin 2.4.0 (bumped as a prerequisite
   for adopting Metro DI). Version pins live in `gradle/libs.versions.toml`. Don't
   bump majors casually. AGP 9.0 needs Gradle 9.1+ and JDK 17+ (the JDK-21 daemon
-  above satisfies that); we keep the standalone `org.jetbrains.kotlin.android`
-  plugin via `android.builtInKotlin=false` + `android.newDsl=false` in
-  `gradle.properties` (see the comment there).
+  above satisfies that). We use AGP 9's built-in Kotlin — there is no standalone
+  `org.jetbrains.kotlin.android` plugin. Built-in Kotlin bundles KGP 2.2.10, so the
+  root `build.gradle.kts` buildscript classpath pins
+  `org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.0` to keep the whole compiler
+  toolchain on 2.4.0 (in lockstep with the Compose and serialization compiler
+  plugins). `jvmTarget` is set in app's `kotlin { compilerOptions { } }` block.
 
 ## Architecture
 
