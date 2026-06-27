@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Quiet linters this repo isn't configured for (they error out with zero findings):
+#   detekt       — no detekt-config.yaml in the repo (we don't use detekt)
+#   markdownlint — no wrapper config available
+# Re-enable with a real config if/when we adopt them.
+reviews:
+  tools:
+    detekt:
+      enabled: false
+    markdownlint:
+      enabled: false

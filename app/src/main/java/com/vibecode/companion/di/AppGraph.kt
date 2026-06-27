@@ -38,8 +38,10 @@ interface AppGraph : ViewModelGraph {
     val runStreamClient: RunStreamClient
     val workerFactory: CompanionWorkerFactory
 
+    /** Builds the root graph, seeding it with the one runtime input every singleton needs. */
     @DependencyGraph.Factory
     fun interface Factory {
+        /** Creates the graph, providing the application [context] under the [AppContext] qualifier. */
         fun create(@Provides @AppContext context: Context): AppGraph
     }
 }

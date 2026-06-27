@@ -98,7 +98,7 @@ dependencies {
     implementation(libs.okhttp.logging)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.work.runtime.ktx)
-    implementation(libs.metrox.viewmodel)
+    // -compose pulls in metrox-viewmodel transitively (via `api`).
     implementation(libs.metrox.viewmodel.compose)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)

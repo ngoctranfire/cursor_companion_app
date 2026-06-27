@@ -26,6 +26,10 @@ class CompanionWorkerFactory(
     private val agentPollWorkerFactory: AgentPollWorker.Factory,
 ) : WorkerFactory() {
 
+    /**
+     * Builds a Metro-injected worker for [workerClassName], or `null` to defer to WorkManager's
+     * default factory for any class this factory doesn't recognize.
+     */
     override fun createWorker(
         appContext: Context,
         workerClassName: String,

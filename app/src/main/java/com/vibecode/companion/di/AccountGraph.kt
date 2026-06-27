@@ -18,12 +18,21 @@ import dev.zacsweers.metro.Provides
  */
 @GraphExtension(AccountScope::class)
 interface AccountGraph {
-    val accountId: String
+    /** The account this graph is scoped to (see [AccountId]). */
+    val accountId: AccountId
+
+    /** Factory for the child [SessionGraph] — opens a per-session scope under this account. */
     val sessionGraphFactory: SessionGraph.Factory
 
+    /**
+     * Contributed factory that creates an [AccountGraph] from the parent [AppGraph].
+     * `@ContributesTo(AppScope::class)` is what makes Metro generate and compile-validate
+     * the extension even though nothing instantiates one yet.
+     */
     @ContributesTo(AppScope::class)
     @GraphExtension.Factory
     interface Factory {
-        fun createAccountGraph(@Provides accountId: String): AccountGraph
+        /** Opens an account scope for [accountId], provided onto the new graph. */
+        fun createAccountGraph(@Provides accountId: AccountId): AccountGraph
     }
 }
