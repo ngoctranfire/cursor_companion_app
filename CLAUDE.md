@@ -15,8 +15,12 @@ See PLAN.md for vision, decisions, and milestones.
   (auto-detected or auto-downloaded via the foojay resolver in settings.gradle.kts).
   Don't add `org.gradle.java.home` — the criteria file supersedes it and keeps
   CLI and IDE on the same daemon.
-- Toolchain: Gradle 8.13 / AGP 8.13.2. Version pins live in
-  `gradle/libs.versions.toml`. Don't bump majors casually.
+- Toolchain: Gradle 9.1.0 / AGP 9.0.1 / Kotlin 2.4.0 (bumped as a prerequisite
+  for adopting Metro DI). Version pins live in `gradle/libs.versions.toml`. Don't
+  bump majors casually. AGP 9.0 needs Gradle 9.1+ and JDK 17+ (the JDK-21 daemon
+  above satisfies that); we keep the standalone `org.jetbrains.kotlin.android`
+  plugin via `android.builtInKotlin=false` + `android.newDsl=false` in
+  `gradle.properties` (see the comment there).
 
 ## Architecture
 
