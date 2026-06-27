@@ -66,7 +66,6 @@ import com.vibecode.companion.ui.theme.BrandGradientVivid
 import com.vibecode.companion.ui.theme.BrandMark
 import com.vibecode.companion.ui.theme.GradientButton
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentListScreen(
     onAgentClick: (String) -> Unit,
@@ -89,6 +88,48 @@ fun AgentListScreen(
         }
     }
 
+    AgentListContent(
+        state = state,
+        snackbarHostState = snackbarHostState,
+        onAgentClick = onAgentClick,
+        onLaunchClick = onLaunchClick,
+        onRefresh = vm::refresh,
+        onLoadMore = vm::loadMore,
+        onArchive = vm::archive,
+        onRetry = vm::retry,
+        onSignOut = { vm.signOut(onSignOut) },
+    )
+}
+
+/**
+ * Stateless agent-list UI: the branded top bar (refresh + overflow menu), the
+ * gradient "New agent" FAB, and the body that switches between loading, error,
+ * empty, and loaded (paginated) states. Rendered purely from [state] plus
+ * callbacks so every state can be screenshot-tested from fixtures.
+ *
+ * @param state the agent-list UI state to render.
+ * @param snackbarHostState host for transient messages (archive failures, etc.).
+ * @param onAgentClick invoked with an agent id when a card is tapped.
+ * @param onLaunchClick invoked to start the new-agent flow (FAB / empty state).
+ * @param onRefresh invoked by the toolbar action and pull-to-refresh.
+ * @param onLoadMore invoked to append the next page of agents.
+ * @param onArchive invoked with an agent id to archive it.
+ * @param onRetry invoked from the error state to reload.
+ * @param onSignOut invoked from the overflow menu to sign out.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AgentListContent(
+    state: AgentListUiState,
+    snackbarHostState: SnackbarHostState,
+    onAgentClick: (String) -> Unit,
+    onLaunchClick: () -> Unit,
+    onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
+    onArchive: (String) -> Unit,
+    onRetry: () -> Unit,
+    onSignOut: () -> Unit,
+) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -104,7 +145,7 @@ fun AgentListScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = vm::refresh) {
+                    IconButton(onClick = onRefresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
                     var menuOpen by remember { mutableStateOf(false) }
@@ -117,7 +158,7 @@ fun AgentListScreen(
                                 text = { Text("Sign out") },
                                 onClick = {
                                     menuOpen = false
-                                    vm.signOut(onSignOut)
+                                    onSignOut()
                                 },
                             )
                         }
@@ -138,7 +179,7 @@ fun AgentListScreen(
     ) { padding ->
         PullToRefreshBox(
             isRefreshing = state.isRefreshing,
-            onRefresh = vm::refresh,
+            onRefresh = onRefresh,
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize(),
@@ -161,7 +202,7 @@ fun AgentListScreen(
                                     .padding(24.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                ErrorState(message = state.error.orEmpty(), onRetry = vm::retry)
+                                ErrorState(message = state.error.orEmpty(), onRetry = onRetry)
                             }
                         }
 
@@ -181,7 +222,7 @@ fun AgentListScreen(
                                 AgentCard(
                                     agent = agent,
                                     onClick = { onAgentClick(agent.id) },
-                                    onArchive = { vm.archive(agent.id) },
+                                    onArchive = { onArchive(agent.id) },
                                 )
                             }
                             if (state.nextCursor != null) {
@@ -199,7 +240,7 @@ fun AgentListScreen(
                                                 color = MaterialTheme.colorScheme.primary,
                                             )
                                         } else {
-                                            TextButton(onClick = vm::loadMore) {
+                                            TextButton(onClick = onLoadMore) {
                                                 Text("Load more")
                                             }
                                         }

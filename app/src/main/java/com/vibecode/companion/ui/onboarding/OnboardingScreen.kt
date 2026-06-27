@@ -68,7 +68,6 @@ fun OnboardingScreen(onConnected: () -> Unit) {
     val vm: OnboardingViewModel = metroViewModel()
     val state by vm.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    var keyVisible by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.connectedInfo) {
         if (state.connectedInfo != null) {
@@ -76,6 +75,42 @@ fun OnboardingScreen(onConnected: () -> Unit) {
             onConnected()
         }
     }
+
+    OnboardingContent(
+        state = state,
+        onKeyChange = vm::onKeyChanged,
+        onConnect = vm::connect,
+        onOpenDashboard = {
+            try {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse("https://cursor.com/dashboard")),
+                )
+            } catch (_: ActivityNotFoundException) {
+                // No browser installed — nothing sensible to do in a sample app.
+            }
+        },
+    )
+}
+
+/**
+ * Stateless onboarding UI: the brand hero, the API-key entry card, the
+ * post-connect confirmation row, and the dashboard link. Rendered purely from
+ * [state] plus callbacks (no ViewModel), so it can be screenshot-tested from
+ * fixtures. The show/hide key toggle is the only internal, ephemeral UI state.
+ *
+ * @param state the onboarding UI state to render.
+ * @param onKeyChange invoked as the user edits the API-key field.
+ * @param onConnect invoked to validate and persist the entered key.
+ * @param onOpenDashboard invoked to open the Cursor dashboard externally.
+ */
+@Composable
+fun OnboardingContent(
+    state: OnboardingUiState,
+    onKeyChange: (String) -> Unit,
+    onConnect: () -> Unit,
+    onOpenDashboard: () -> Unit,
+) {
+    var keyVisible by remember { mutableStateOf(false) }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
@@ -138,7 +173,7 @@ fun OnboardingScreen(onConnected: () -> Unit) {
 
                     OutlinedTextField(
                         value = state.key,
-                        onValueChange = vm::onKeyChanged,
+                        onValueChange = onKeyChange,
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("API key") },
                         placeholder = { Text("crsr_...", fontFamily = FontFamily.Monospace) },
@@ -169,7 +204,7 @@ fun OnboardingScreen(onConnected: () -> Unit) {
                             keyboardType = KeyboardType.Password,
                             imeAction = ImeAction.Done,
                         ),
-                        keyboardActions = KeyboardActions(onDone = { vm.connect() }),
+                        keyboardActions = KeyboardActions(onDone = { onConnect() }),
                     )
 
                     if (state.error != null) {
@@ -186,7 +221,7 @@ fun OnboardingScreen(onConnected: () -> Unit) {
 
                     GradientButton(
                         text = "Connect",
-                        onClick = vm::connect,
+                        onClick = onConnect,
                         enabled = state.canConnect,
                         loading = state.isValidating,
                     )
@@ -218,15 +253,7 @@ fun OnboardingScreen(onConnected: () -> Unit) {
 
             OutlineActionButton(
                 text = "Open Cursor Dashboard",
-                onClick = {
-                    try {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse("https://cursor.com/dashboard")),
-                        )
-                    } catch (_: ActivityNotFoundException) {
-                        // No browser installed — nothing sensible to do in a sample app.
-                    }
-                },
+                onClick = onOpenDashboard,
                 leading = {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.OpenInNew,
