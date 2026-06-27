@@ -16,6 +16,10 @@ okhttp = "4.12.0"
 datastore = "1.1.1"
 work = "2.10.0"
 junit = "4.13.2"
+# Screenshot testing: Roborazzi (JVM/Robolectric) renders Compose to real pixels
+# off-device. Version-locked together; robolectric 4.16.1 supports compileSdk 36.
+roborazzi = "1.64.0"
+robolectric = "4.16.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -43,6 +47,14 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 # LocalMetroViewModelFactory, ViewModelKey…). -compose exposes -viewmodel via `api`,
 # so depending on -compose alone is enough.
 metrox-viewmodel-compose = { module = "dev.zacsweers.metro:metrox-viewmodel-compose", version.ref = "metro" }
+# Screenshot testing (unit-test classpath). ui-test-junit4 gives createComposeRule;
+# ui-test-manifest (debug) supplies the test activity; roborazzi captures the pixels.
+roborazzi = { module = "io.github.takahirom.roborazzi:roborazzi", version.ref = "roborazzi" }
+roborazzi-compose = { module = "io.github.takahirom.roborazzi:roborazzi-compose", version.ref = "roborazzi" }
+roborazzi-junit-rule = { module = "io.github.takahirom.roborazzi:roborazzi-junit-rule", version.ref = "roborazzi" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -51,3 +63,4 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 # Metro compiler plugin. The Gradle plugin auto-adds Metro's runtime + wires the
 # compiler plugin — do NOT add KSP/kapt or a runtime dependency by hand.
 metro = { id = "dev.zacsweers.metro", version.ref = "metro" }
+roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }

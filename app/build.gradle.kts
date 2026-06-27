@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.metro)
+    alias(libs.plugins.roborazzi)
 }
 
 // Release signing is opt-in: present only when keystore.properties exists
@@ -57,6 +58,13 @@ android {
     buildFeatures {
         compose = true
     }
+    // Roborazzi screenshot tests run as Robolectric unit tests, so they need the
+    // merged Android resources/assets on the unit-test classpath.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 // AGP 9 built-in Kotlin registers the standard `kotlin` extension; configure the
@@ -102,4 +110,12 @@ dependencies {
     implementation(libs.metrox.viewmodel.compose)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)
+    // Screenshot testing (Roborazzi + Robolectric, JVM — no device/emulator).
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.roborazzi.junit.rule)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
