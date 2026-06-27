@@ -12,6 +12,10 @@ import com.vibecode.companion.data.api.PromptBody
 import com.vibecode.companion.data.api.RepoConfig
 import com.vibecode.companion.data.storage.PromptStore
 import com.vibecode.companion.data.storage.RepoCache
+import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ContributesIntoMap
+import dev.zacsweers.metro.Inject
+import dev.zacsweers.metrox.viewmodel.ViewModelKey
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,6 +45,9 @@ data class LaunchUiState(
     val canLaunch: Boolean get() = selectedRepo != null && prompt.isNotBlank() && !launching
 }
 
+@Inject
+@ViewModelKey
+@ContributesIntoMap(AppScope::class)
 class LaunchViewModel(
     private val apiClient: CursorApiClient,
     private val repoCache: RepoCache,

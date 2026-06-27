@@ -1,6 +1,10 @@
 [versions]
 agp = "9.0.1"
 kotlin = "2.4.0"
+# Metro is a Kotlin compiler plugin (NOT KSP/kapt) and is version-locked to kotlinc.
+# 1.2.1 supports Kotlin 2.4.0 (see https://zacsweers.github.io/metro/1.2.1/compatibility/).
+# Bump in lockstep with `kotlin` only after checking the compat table.
+metro = "1.2.1"
 coreKtx = "1.17.0"
 activityCompose = "1.12.3"
 composeBom = "2026.01.01"
@@ -35,8 +39,16 @@ okhttp-logging = { module = "com.squareup.okhttp3:logging-interceptor", version.
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
 androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+# MetroX ViewModel + Compose helpers (metroViewModel/assistedMetroViewModel,
+# LocalMetroViewModelFactory, ViewModelKey…). -compose exposes -viewmodel via `api`;
+# both declared explicitly for clarity.
+metrox-viewmodel = { module = "dev.zacsweers.metro:metrox-viewmodel", version.ref = "metro" }
+metrox-viewmodel-compose = { module = "dev.zacsweers.metro:metrox-viewmodel-compose", version.ref = "metro" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+# Metro compiler plugin. The Gradle plugin auto-adds Metro's runtime + wires the
+# compiler plugin — do NOT add KSP/kapt or a runtime dependency by hand.
+metro = { id = "dev.zacsweers.metro", version.ref = "metro" }

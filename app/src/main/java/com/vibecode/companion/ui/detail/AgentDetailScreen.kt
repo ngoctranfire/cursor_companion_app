@@ -58,9 +58,9 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vibecode.companion.data.api.RunGitBranch
 import com.vibecode.companion.data.api.RunStatus
+import dev.zacsweers.metrox.viewmodel.assistedMetroViewModel
 import com.vibecode.companion.ui.common.StatusDot
 import com.vibecode.companion.ui.common.StatusPill
-import com.vibecode.companion.ui.common.companionViewModel
 import com.vibecode.companion.ui.common.formatDuration
 import com.vibecode.companion.ui.common.relativeTime
 import com.vibecode.companion.ui.theme.BrandGradient
@@ -74,8 +74,10 @@ import com.vibecode.companion.ui.theme.runStatusColor
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
-    val vm = companionViewModel { container ->
-        AgentDetailViewModel(container.apiClient, container.runStreamClient, container.promptStore, agentId)
+    // Assisted: the runtime agentId is supplied here (not the graph). Keyed by agentId so each
+    // agent gets its own VM instance scoped to this nav entry's ViewModelStoreOwner.
+    val vm = assistedMetroViewModel<AgentDetailViewModel, AgentDetailViewModel.Factory>(key = agentId) {
+        create(agentId)
     }
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }

@@ -59,7 +59,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vibecode.companion.data.api.AgentStatus
 import com.vibecode.companion.data.api.CloudAgent
-import com.vibecode.companion.ui.common.companionViewModel
+import dev.zacsweers.metrox.viewmodel.metroViewModel
 import com.vibecode.companion.ui.common.relativeTime
 import com.vibecode.companion.ui.theme.BrandGradient
 import com.vibecode.companion.ui.theme.BrandGradientVivid
@@ -73,9 +73,7 @@ fun AgentListScreen(
     onLaunchClick: () -> Unit,
     onSignOut: () -> Unit,
 ) {
-    val vm = companionViewModel { container ->
-        AgentListViewModel(container.apiClient, container::clearAccountData)
-    }
+    val vm: AgentListViewModel = metroViewModel()
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 

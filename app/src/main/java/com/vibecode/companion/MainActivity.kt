@@ -9,9 +9,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import com.vibecode.companion.ui.AppNavHost
 import com.vibecode.companion.ui.theme.CompanionTheme
+import dev.zacsweers.metrox.viewmodel.LocalMetroViewModelFactory
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -27,13 +29,18 @@ class MainActivity : ComponentActivity() {
         // their own nav state and must not re-trigger the deep link.
         val initialAgentId = if (savedInstanceState == null) intent?.getStringExtra("agentId") else null
         intent?.removeExtra("agentId")
+        // The Compose root: make Metro's ViewModel factory available so screens can use
+        // metroViewModel() / assistedMetroViewModel().
+        val viewModelFactory = (application as CompanionApp).graph.metroViewModelFactory
         setContent {
             CompanionTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    AppNavHost(initialAgentId = initialAgentId)
+                    CompositionLocalProvider(LocalMetroViewModelFactory provides viewModelFactory) {
+                        AppNavHost(initialAgentId = initialAgentId)
+                    }
                 }
             }
         }

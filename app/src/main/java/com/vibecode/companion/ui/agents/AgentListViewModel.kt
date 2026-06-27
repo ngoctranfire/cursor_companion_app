@@ -5,6 +5,11 @@ import androidx.lifecycle.viewModelScope
 import com.vibecode.companion.data.api.CloudAgent
 import com.vibecode.companion.data.api.CursorApiClient
 import com.vibecode.companion.data.api.CursorApiException
+import com.vibecode.companion.data.storage.AccountStore
+import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ContributesIntoMap
+import dev.zacsweers.metro.Inject
+import dev.zacsweers.metrox.viewmodel.ViewModelKey
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,9 +29,12 @@ data class AgentListUiState(
     val snackbarMessage: String? = null,
 )
 
+@Inject
+@ViewModelKey
+@ContributesIntoMap(AppScope::class)
 class AgentListViewModel(
     private val apiClient: CursorApiClient,
-    private val clearAccountData: suspend () -> Unit,
+    private val accountStore: AccountStore,
 ) : ViewModel() {
 
     private companion object {
@@ -121,7 +129,7 @@ class AgentListViewModel(
 
     fun signOut(onSignedOut: () -> Unit) {
         viewModelScope.launch {
-            clearAccountData()
+            accountStore.clearAccountData()
             onSignedOut()
         }
     }

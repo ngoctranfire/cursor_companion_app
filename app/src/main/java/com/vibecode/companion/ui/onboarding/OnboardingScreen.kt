@@ -51,7 +51,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.vibecode.companion.ui.common.companionViewModel
+import dev.zacsweers.metrox.viewmodel.metroViewModel
 import com.vibecode.companion.ui.theme.BrandMark
 import com.vibecode.companion.ui.theme.GradientButton
 import com.vibecode.companion.ui.theme.OutlineActionButton
@@ -65,9 +65,7 @@ import kotlinx.coroutines.delay
  */
 @Composable
 fun OnboardingScreen(onConnected: () -> Unit) {
-    val vm = companionViewModel { container ->
-        OnboardingViewModel(container.apiClient, container.apiKeyStore)
-    }
+    val vm: OnboardingViewModel = metroViewModel()
     val state by vm.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var keyVisible by remember { mutableStateOf(false) }
