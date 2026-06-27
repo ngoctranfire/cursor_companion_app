@@ -38,6 +38,12 @@ class PastRunCardScreenshotTest {
     @get:Rule
     val composeRule = createComposeRule()
 
+    /**
+     * Asserts that the "View steps" action stays on a single line (so the card
+     * keeps its one-row height) when [PastRunCard] is rendered at its real
+     * on-screen width — the layout that previously wrapped the button to two
+     * lines. Compares the render against the committed golden.
+     */
     @Test
     fun pastRunCard_viewStepsButton_staysSingleLine() {
         composeRule.setContent {
