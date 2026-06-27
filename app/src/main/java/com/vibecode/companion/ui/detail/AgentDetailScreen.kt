@@ -277,6 +277,11 @@ fun AgentDetailContent(
     }
 }
 
+/**
+ * Scrollable run view: earlier runs, the active or replayed run's timeline, the
+ * live / reconnect indicators, and the branches & PRs card. Auto-scrolls to new
+ * timeline items while the list is already near the bottom.
+ */
 @Composable
 private fun DetailBody(
     state: AgentDetailUiState,
@@ -450,12 +455,14 @@ private fun DetailBody(
     }
 }
 
+/** True when the last visible item is within [threshold] of the end — the cue to keep auto-scrolling as items stream in. */
 private fun LazyListState.isNearBottom(threshold: Int = 3): Boolean {
     val info = layoutInfo
     val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: return true
     return lastVisible >= info.totalItemsCount - 1 - threshold
 }
 
+/** Small uppercase, muted label that titles a section of the timeline. */
 @Composable
 private fun SectionHeader(label: String) {
     Text(
@@ -467,6 +474,10 @@ private fun SectionHeader(label: String) {
     )
 }
 
+/**
+ * Bottom composer for follow-up messages: a multiline text field and a gradient
+ * send button that disables while empty or [isSending].
+ */
 @Composable
 private fun FollowUpComposer(
     text: String,

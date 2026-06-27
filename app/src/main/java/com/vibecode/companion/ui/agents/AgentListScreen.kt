@@ -66,6 +66,10 @@ import com.vibecode.companion.ui.theme.BrandGradientVivid
 import com.vibecode.companion.ui.theme.BrandMark
 import com.vibecode.companion.ui.theme.GradientButton
 
+/**
+ * Stateful agent-list screen: binds [AgentListViewModel], refreshes on resume,
+ * relays transient messages to a snackbar, and renders [AgentListContent].
+ */
 @Composable
 fun AgentListScreen(
     onAgentClick: (String) -> Unit,
@@ -283,6 +287,11 @@ private fun GradientFab(onClick: () -> Unit) {
     }
 }
 
+/**
+ * One agent row: gradient avatar, name (with an archived badge), an env chip and
+ * last-active time, an overflow menu to archive, and a trailing chevron. Tapping
+ * the card opens the agent's detail screen.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AgentCard(
@@ -383,6 +392,7 @@ private fun AgentAvatar(name: String?) {
     }
 }
 
+/** Small rounded pill showing an agent's environment type (e.g. "cloud"). */
 @Composable
 private fun EnvChip(label: String) {
     Surface(
@@ -399,6 +409,7 @@ private fun EnvChip(label: String) {
     }
 }
 
+/** Outlined "ARCHIVED" pill shown next to the name of an archived agent. */
 @Composable
 private fun ArchivedBadge() {
     Surface(
@@ -416,6 +427,7 @@ private fun ArchivedBadge() {
     }
 }
 
+/** Empty-list placeholder: brand mark, an explanatory line, and a launch CTA. */
 @Composable
 private fun EmptyState(onLaunchClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -441,6 +453,7 @@ private fun EmptyState(onLaunchClick: () -> Unit) {
     }
 }
 
+/** First-page load failure: a heading, the error [message], and a Retry button. */
 @Composable
 private fun ErrorState(message: String, onRetry: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {

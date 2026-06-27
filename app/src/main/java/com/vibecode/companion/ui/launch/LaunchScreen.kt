@@ -71,6 +71,11 @@ import java.time.Instant
 private fun repoDisplayName(url: String): String =
     url.removePrefix("https://github.com/").removeSuffix(".git").trimEnd('/')
 
+/**
+ * Stateful launch screen: binds [LaunchViewModel], navigates away on a
+ * successful launch, relays launch errors to a snackbar, and renders
+ * [LaunchContent].
+ */
 @Composable
 fun LaunchScreen(onLaunched: (agentId: String) -> Unit, onBack: () -> Unit) {
     val vm: LaunchViewModel = metroViewModel()
@@ -425,6 +430,7 @@ private fun OptionsSection(
     }
 }
 
+/** Two-segment Agent/Plan selector choosing how the agent runs. */
 @Composable
 private fun ModePicker(planMode: Boolean, onPlanModeChange: (Boolean) -> Unit) {
     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -463,6 +469,10 @@ private fun ModePicker(planMode: Boolean, onPlanModeChange: (Boolean) -> Unit) {
     }
 }
 
+/**
+ * Repository picker: a read-only dropdown of repo URLs with a refresh action and
+ * supporting text reflecting the loading / error / last-updated state.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RepoSelector(
@@ -562,6 +572,7 @@ private fun RepoSelector(
     }
 }
 
+/** Model picker dropdown; the "Default" entry (null id) lets the server choose. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModelSelector(
