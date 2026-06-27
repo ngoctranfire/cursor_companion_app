@@ -24,7 +24,12 @@ Every PR is reviewed by **CodeRabbit** before a human merges. A green build is
    can't hide in an unread thread or a collapsed section:
    - If it's valid, **fix it and push.** CodeRabbit is **incremental** — each push
      re-reviews only the new changes, so keep pushing fixes and re-reading its
-     feedback.
+     feedback. **Caveat: an incremental re-review does _not_ recompute the
+     pre-merge checks** (docstring coverage, etc.) — after a follow-up commit
+     fixes one, the summary keeps showing the *stale* failing number even though
+     the underlying gap is closed. Force a recompute with **`@coderabbitai full
+     review`** (not the incremental `@coderabbitai review`), then confirm the
+     check flips green before treating it as cleared.
    - If it's a **non-issue / false positive**, don't just close it — **reply with
      `@coderabbitai` explaining why** (wrong assumption, intentional design,
      already handled elsewhere). It responds and, if convinced, acknowledges and
