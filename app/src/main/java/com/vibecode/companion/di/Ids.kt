@@ -13,6 +13,6 @@ package com.vibecode.companion.di
 @JvmInline
 value class AccountId(val value: String)
 
-/** Identifies a single agent run / session; supplied to the [SessionGraph] extension factory. */
+/** Identifies an agent (the `/v1/agents/{agentId}` resource); supplied to the [SessionGraph] extension factory. */
 @JvmInline
 value class AgentId(val value: String)

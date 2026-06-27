@@ -5,7 +5,7 @@ import dev.zacsweers.metro.GraphExtension
 import dev.zacsweers.metro.Provides
 
 /**
- * **Stub** session-scoped graph extension (per agent run / session).
+ * **Stub** session-scoped graph extension (per agent / session).
  *
  * Its `Factory` is `@ContributesTo(AccountScope::class)`, so it's generated and validated as
  * a child of [AccountGraph]. `@GraphExtension(SessionScope::class)` implies
@@ -17,7 +17,7 @@ import dev.zacsweers.metro.Provides
  */
 @GraphExtension(SessionScope::class)
 interface SessionGraph {
-    /** The agent run this session graph is scoped to (see [AgentId]). */
+    /** The agent this session graph is scoped to (see [AgentId]). */
     val agentId: AgentId
 
     /**
