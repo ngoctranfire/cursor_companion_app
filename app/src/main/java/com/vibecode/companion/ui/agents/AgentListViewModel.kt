@@ -129,8 +129,12 @@ class AgentListViewModel(
 
     fun signOut(onSignedOut: () -> Unit) {
         viewModelScope.launch {
-            accountStore.clearAccountData()
-            onSignedOut()
+            try {
+                accountStore.clearAccountData()
+                onSignedOut()
+            } catch (e: IOException) {
+                _uiState.update { it.copy(snackbarMessage = "Couldn't sign out — try again") }
+            }
         }
     }
 

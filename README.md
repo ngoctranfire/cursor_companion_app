@@ -93,17 +93,17 @@ which is treated as the source of truth for the client DTOs.
 | Area            | Choice |
 |-----------------|--------|
 | Platform        | Native Android (single `:app` module) |
-| Language        | Kotlin 2.0.21 |
+| Language        | Kotlin 2.4.0 |
 | UI              | Jetpack Compose (Material 3), Navigation-Compose |
 | Min / target SDK| `minSdk 28`, `target`/`compileSdk 36` |
 | JVM target      | 11 (Gradle daemon runs on JDK 21) |
-| Build           | Gradle 8.14.5 (wrapper) + Android Gradle Plugin 8.13.2 |
+| Build           | Gradle 9.1.0 (wrapper) + Android Gradle Plugin 9.0.1 |
 | Networking      | OkHttp 4.12.0 + `okhttp-sse` + logging interceptor |
 | Serialization   | kotlinx.serialization (JSON) |
 | Async           | Kotlin Coroutines + Flow |
 | Storage         | DataStore Preferences + Android Keystore (encrypted key) |
 | Background work | WorkManager |
-| DI              | Manual — an `AppContainer` on the `Application` class (no Hilt) |
+| DI              | Metro (compile-time DI, Kotlin compiler plugin) — root `AppGraph` on the `Application` class |
 
 Versions are pinned in [`gradle/libs.versions.toml`](gradle/libs.versions.toml).
 
@@ -115,9 +115,9 @@ cursor_companion/
 │   └── src/main/
 │       ├── AndroidManifest.xml
 │       ├── java/com/vibecode/companion/
-│       │   ├── CompanionApp.kt        # Application + manual DI root
-│       │   ├── AppContainer.kt        # wires stores, API client, stream client
+│       │   ├── CompanionApp.kt        # Application + Metro graph root + WorkManager config
 │       │   ├── MainActivity.kt        # single Activity hosting Compose
+│       │   ├── di/                    # Metro graph: AppGraph + AccountGraph/SessionGraph extensions, scopes, VM factory
 │       │   ├── data/
 │       │   │   ├── api/               # CursorApiClient, RunStreamClient, DTOs
 │       │   │   └── storage/           # ApiKeyStore, RepoCache, PromptStore, DataStore
@@ -126,7 +126,7 @@ cursor_companion/
 │       │   │   ├── agents/            #   agent list / paginate / archive / sign-out
 │       │   │   ├── launch/            #   configure & launch an agent (+ voice input)
 │       │   │   ├── detail/            #   live run timeline, follow-ups, cancel
-│       │   │   ├── common/ theme/     #   shared VM factory, status UI, theming
+│       │   │   ├── common/ theme/     #   status UI, theming
 │       │   │   └── AppNavHost.kt      #   navigation graph
 │       │   ├── notifications/         # channel + terminal-run notifications
 │       │   └── work/                  # WorkManager poll worker + scheduler
