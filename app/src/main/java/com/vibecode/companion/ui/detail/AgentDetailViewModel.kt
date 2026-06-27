@@ -34,8 +34,11 @@ import java.io.IOException
 sealed interface TimelineItem {
     /** What the user asked this run to do (recalled from local PromptStore). */
     data class UserPrompt(val text: String) : TimelineItem
+    /** A block of assistant-authored text (coalesced from consecutive deltas). */
     data class AssistantText(val text: String) : TimelineItem
+    /** A block of the model's reasoning/thinking (coalesced from consecutive deltas). */
     data class Thinking(val text: String) : TimelineItem
+    /** A tool invocation, updated in place as its status and result stream in. */
     data class Tool(
         val callId: String?,
         val name: String?,
@@ -45,6 +48,7 @@ sealed interface TimelineItem {
         val argsPretty: String? = null,
         val resultPretty: String? = null,
     ) : TimelineItem
+    /** The run's terminal summary card — final status, text, duration, and git/PR info. */
     data class ResultCard(
         val status: String?,
         val text: String?,
@@ -53,6 +57,7 @@ sealed interface TimelineItem {
     ) : TimelineItem
 }
 
+/** Immutable UI state for the agent detail screen. */
 data class AgentDetailUiState(
     val isLoading: Boolean = true,
     /** Fatal load failure (nothing to show) — renders a full-screen retry. */
@@ -104,6 +109,7 @@ class AgentDetailViewModel(
     @ManualViewModelAssistedFactoryKey
     @ContributesIntoMap(AppScope::class)
     interface Factory : ManualViewModelAssistedFactory {
+        /** Builds the ViewModel for the given [agentId], passed in at the call site. */
         fun create(agentId: String): AgentDetailViewModel
     }
 
@@ -178,6 +184,7 @@ class AgentDetailViewModel(
         }
     }
 
+    /** Retries the full-screen load after a fatal load error. */
     fun retryLoad() = load(initial = true)
 
     /** Lightweight refresh from the topbar — re-fetches agent + runs. */
@@ -186,10 +193,12 @@ class AgentDetailViewModel(
         load(initial = false)
     }
 
+    /** Two-way binding for the follow-up text field. */
     fun onFollowUpTextChange(text: String) {
         _uiState.update { it.copy(followUpText = text) }
     }
 
+    /** Clears the one-shot snackbar message after the UI has shown it. */
     fun consumeMessage() {
         _uiState.update { it.copy(transientMessage = null) }
     }
@@ -218,6 +227,7 @@ class AgentDetailViewModel(
         }
     }
 
+    /** Creates a new run from the typed follow-up, then streams it as the newest run. */
     fun sendFollowUp() {
         val text = _uiState.value.followUpText.trim()
         if (text.isEmpty() || _uiState.value.isSending) return
@@ -255,6 +265,7 @@ class AgentDetailViewModel(
         }
     }
 
+    /** Requests cancellation of the in-flight newest run, then refreshes to reflect the outcome. */
     fun cancelRun() {
         val runId = _uiState.value.newestRun?.id ?: return
         if (_uiState.value.isCancelling) return

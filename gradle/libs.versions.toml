@@ -40,9 +40,8 @@ androidx-datastore-preferences = { module = "androidx.datastore:datastore-prefer
 androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 # MetroX ViewModel + Compose helpers (metroViewModel/assistedMetroViewModel,
-# LocalMetroViewModelFactory, ViewModelKey…). -compose exposes -viewmodel via `api`;
-# both declared explicitly for clarity.
-metrox-viewmodel = { module = "dev.zacsweers.metro:metrox-viewmodel", version.ref = "metro" }
+# LocalMetroViewModelFactory, ViewModelKey…). -compose exposes -viewmodel via `api`,
+# so depending on -compose alone is enough.
 metrox-viewmodel-compose = { module = "dev.zacsweers.metro:metrox-viewmodel-compose", version.ref = "metro" }
 
 [plugins]

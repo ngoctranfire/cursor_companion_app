@@ -24,23 +24,34 @@ import dev.zacsweers.metro.SingleIn
 @BindingContainer
 object AppBindings {
 
+    /** Encrypted store for the Cursor API key — single instance so writes are seen everywhere. */
     @Provides
     @SingleIn(AppScope::class)
     fun apiKeyStore(@AppContext context: Context): ApiKeyStore = ApiKeyStore(context)
 
+    /** Cache of the user's repository list (the API rate-limits the live fetch to 1/min). */
     @Provides
     @SingleIn(AppScope::class)
     fun repoCache(@AppContext context: Context): RepoCache = RepoCache(context)
 
+    /** Local store of launch prompts — the API never echoes them back, so we keep our own copy. */
     @Provides
     @SingleIn(AppScope::class)
     fun promptStore(@AppContext context: Context): PromptStore = PromptStore(context)
 
+    /**
+     * The Cursor REST client. Reads the key lazily through [ApiKeyStore.get] so a sign-in or
+     * sign-out is picked up without rebuilding the client.
+     */
     @Provides
     @SingleIn(AppScope::class)
     fun apiClient(apiKeyStore: ApiKeyStore): CursorApiClient =
         CursorApiClient(apiKeyProvider = { apiKeyStore.get() })
 
+    /**
+     * The SSE client for live run streams. Shares [CursorApiClient]'s configured OkHttp SSE
+     * client and the same lazy key provider so auth stays consistent with REST calls.
+     */
     @Provides
     @SingleIn(AppScope::class)
     fun runStreamClient(apiClient: CursorApiClient, apiKeyStore: ApiKeyStore): RunStreamClient =

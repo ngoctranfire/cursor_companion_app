@@ -48,6 +48,7 @@ class AgentPollWorker(
      */
     @AssistedFactory
     interface Factory {
+        /** Builds the worker from WorkManager's framework-supplied [context]/[params]. */
         fun create(context: Context, params: WorkerParameters): AgentPollWorker
     }
 
@@ -61,6 +62,11 @@ class AgentPollWorker(
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+     * Runs one poll cycle: lists agents, fetches the latest run for up to [MAX_RUN_FETCHES] of
+     * them, notifies on transitions into a terminal state, and persists the new baseline.
+     * Retries a few times on transient failure, then defers to the next scheduled slot.
+     */
     override suspend fun doWork(): Result {
         return try {
             if (apiKeyStore.get() == null) return Result.success()

@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.IOException
 
+/** Immutable UI state for the paginated agent list screen. */
 data class AgentListUiState(
     val items: List<CloudAgent> = emptyList(),
     val isLoading: Boolean = false,
@@ -29,6 +30,11 @@ data class AgentListUiState(
     val snackbarMessage: String? = null,
 )
 
+/**
+ * State holder for the agent list: loads the first page, paginates with a cursor, refreshes,
+ * archives agents, and drives sign-out. The injected [AccountStore] is the seam that replaced
+ * the old `AppContainer` sign-out path.
+ */
 @Inject
 @ViewModelKey
 @ContributesIntoMap(AppScope::class)
@@ -83,6 +89,7 @@ class AgentListViewModel(
         loadFirstPage(fullScreen = true)
     }
 
+    /** Appends the next cursor page; no-op when there's no cursor or a load is already running. */
     fun loadMore() {
         val state = _uiState.value
         val cursor = state.nextCursor ?: return
@@ -108,6 +115,7 @@ class AgentListViewModel(
         }
     }
 
+    /** Archives an agent, removing it optimistically and remembering it so refreshes can't resurrect it. */
     fun archive(agentId: String) {
         viewModelScope.launch {
             try {
@@ -127,6 +135,10 @@ class AgentListViewModel(
         }
     }
 
+    /**
+     * Wipes account-scoped data via [AccountStore] and invokes [onSignedOut] to navigate away.
+     * A DataStore IO failure is surfaced as a snackbar rather than stranding the user signed-in.
+     */
     fun signOut(onSignedOut: () -> Unit) {
         viewModelScope.launch {
             try {
@@ -138,10 +150,15 @@ class AgentListViewModel(
         }
     }
 
+    /** Clears the transient snackbar message after the UI has shown it. */
     fun snackbarShown() {
         _uiState.update { it.copy(snackbarMessage = null) }
     }
 
+    /**
+     * Loads page one. [fullScreen] drives a blocking spinner vs a silent refresh;
+     * [preserveLoadedPages] keeps already-loaded pages merged behind the fresh first page.
+     */
     private fun loadFirstPage(fullScreen: Boolean, preserveLoadedPages: Boolean = false) {
         loadMoreJob?.cancel()
         firstPageJob?.cancel()
@@ -178,6 +195,7 @@ class AgentListViewModel(
         }
     }
 
+    /** First-page failure: show a full-screen error only when there's nothing already on screen. */
     private fun onFirstPageError(message: String) {
         _uiState.update { current ->
             if (current.items.isEmpty()) {
@@ -189,6 +207,7 @@ class AgentListViewModel(
         }
     }
 
+    /** Maps an API/IO exception to a user-facing message, special-casing known Cursor error codes. */
     private fun describeError(e: Exception): String = when (e) {
         is CursorApiException -> when (e.code) {
             "rate_limit_exceeded" -> "Rate limited — wait a moment and try again"

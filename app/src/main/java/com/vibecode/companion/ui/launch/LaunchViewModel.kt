@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.IOException
 
+/** Immutable UI state for the launch screen (repo + model pickers, prompt, and launch options). */
 data class LaunchUiState(
     // Repos
     val repoUrls: List<String> = emptyList(),
@@ -45,6 +46,11 @@ data class LaunchUiState(
     val canLaunch: Boolean get() = selectedRepo != null && prompt.isNotBlank() && !launching
 }
 
+/**
+ * State holder for the launch screen: loads the repo list (cache-first) and model list, tracks
+ * the prompt and launch options, and creates the agent. The launched prompt is saved to
+ * [PromptStore] because the API never echoes it back.
+ */
 @Inject
 @ViewModelKey
 @ContributesIntoMap(AppScope::class)
@@ -102,6 +108,7 @@ class LaunchViewModel(
         }
     }
 
+    /** Loads the model picker options; failures degrade silently to the "Default" model only. */
     private fun loadModels() {
         viewModelScope.launch {
             try {
@@ -115,11 +122,13 @@ class LaunchViewModel(
         }
     }
 
+    /** Selects the repo to launch the agent against. */
     fun selectRepo(url: String) = _uiState.update { it.copy(selectedRepo = url) }
 
     /** Pass null for the "Default" option (no explicit ModelRef sent). */
     fun selectModel(modelId: String?) = _uiState.update { it.copy(selectedModelId = modelId) }
 
+    /** Two-way binding for the prompt text field. */
     fun setPrompt(text: String) = _uiState.update { it.copy(prompt = text) }
 
     /** Appends speech-recognized text to whatever is already typed, separated by a space. */
@@ -131,10 +140,13 @@ class LaunchViewModel(
         }
     }
 
+    /** Toggles whether the agent opens a PR automatically when it finishes. */
     fun setAutoCreatePr(enabled: Boolean) = _uiState.update { it.copy(autoCreatePr = enabled) }
 
+    /** Toggles plan mode (the agent proposes a plan instead of editing directly). */
     fun setPlanMode(enabled: Boolean) = _uiState.update { it.copy(planMode = enabled) }
 
+    /** Creates the agent from the current selection and prompt; sets [LaunchUiState.launchedAgentId] on success. */
     fun launch() {
         val state = _uiState.value
         val repo = state.selectedRepo ?: return
