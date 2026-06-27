@@ -10,7 +10,7 @@ from the phone (create repo → agent scaffolds → preview deployed).
 - **Stack**: native Kotlin + Jetpack Compose (user's choice). minSdk 28, target/compileSdk 36.
   AGP 8.9.1 / Kotlin 2.0.21 / Compose BOM 2026.01.01 / Gradle 8.11.1 — pinned to versions
   already cached on this machine.
-- **No Hilt**: manual DI via `AppContainer` on the `Application` class.
+- **DI**: Metro (compile-time DI); migrated off the manual `AppContainer` per ADR-001 (see docs/dependency-injection.md).
 - **API**: Cursor Cloud Agents API **v1** only (v0 is legacy). Spec snapshot:
   `docs/cloud-agents-openapi.yaml`. All access goes through `CursorApiClient`
   (the API is beta — isolate breaking changes there).

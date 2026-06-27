@@ -6,12 +6,16 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.vibecode.companion.CompanionApp
+import com.vibecode.companion.data.api.CursorApiClient
 import com.vibecode.companion.data.api.CursorApiException
 import com.vibecode.companion.data.api.Run
 import com.vibecode.companion.data.api.RunStatus
+import com.vibecode.companion.data.storage.ApiKeyStore
 import com.vibecode.companion.data.storage.companionDataStore
 import com.vibecode.companion.notifications.AgentNotifications
+import dev.zacsweers.metro.Assisted
+import dev.zacsweers.metro.AssistedFactory
+import dev.zacsweers.metro.AssistedInject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.builtins.MapSerializer
@@ -28,10 +32,24 @@ import java.time.Instant
  * when they were updated after the last completed poll. Budget: at most
  * ~6 API calls per poll (1 list + up to 5 run fetches).
  */
+@AssistedInject
 class AgentPollWorker(
-    context: Context,
-    params: WorkerParameters,
+    @Assisted context: Context,
+    @Assisted params: WorkerParameters,
+    private val apiKeyStore: ApiKeyStore,
+    private val apiClient: CursorApiClient,
 ) : CoroutineWorker(context, params) {
+
+    /**
+     * Metro has no first-party Worker support, so the worker is assisted-injected: the
+     * framework-supplied [Context]/[WorkerParameters] are `@Assisted`, the DI singletons are
+     * graph-resolved. [CompanionWorkerFactory] bridges WorkManager's reflective instantiation
+     * to this factory.
+     */
+    @AssistedFactory
+    interface Factory {
+        fun create(context: Context, params: WorkerParameters): AgentPollWorker
+    }
 
     private companion object {
         val PREF_RUN_STATUSES = stringPreferencesKey("last_known_run_statuses")
@@ -45,10 +63,9 @@ class AgentPollWorker(
 
     override suspend fun doWork(): Result {
         return try {
-            val container = (applicationContext as CompanionApp).container
-            if (container.apiKeyStore.get() == null) return Result.success()
+            if (apiKeyStore.get() == null) return Result.success()
 
-            val agents = container.apiClient
+            val agents = apiClient
                 .listAgents(limit = 10, includeArchived = false)
                 .items
 
@@ -64,7 +81,7 @@ class AgentPollWorker(
             for (agent in candidates) {
                 val runId = agent.latestRunId ?: continue
                 val run: Run = try {
-                    container.apiClient.getRun(agent.id, runId)
+                    apiClient.getRun(agent.id, runId)
                 } catch (ex: CursorApiException) {
                     if (ex.isRateLimited) break // back off; the next slot retries
                     continue

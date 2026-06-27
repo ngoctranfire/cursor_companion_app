@@ -6,6 +6,10 @@ import com.vibecode.companion.data.api.ApiKeyInfo
 import com.vibecode.companion.data.api.CursorApiClient
 import com.vibecode.companion.data.api.CursorApiException
 import com.vibecode.companion.data.storage.ApiKeyStore
+import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ContributesIntoMap
+import dev.zacsweers.metro.Inject
+import dev.zacsweers.metrox.viewmodel.ViewModelKey
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,6 +26,9 @@ data class OnboardingUiState(
     val canConnect: Boolean get() = key.isNotBlank() && !isValidating && connectedInfo == null
 }
 
+@Inject
+@ViewModelKey
+@ContributesIntoMap(AppScope::class)
 class OnboardingViewModel(
     private val apiClient: CursorApiClient,
     private val apiKeyStore: ApiKeyStore,

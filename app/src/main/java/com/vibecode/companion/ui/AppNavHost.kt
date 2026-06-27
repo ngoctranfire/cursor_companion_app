@@ -38,14 +38,14 @@ object Routes {
 @Composable
 fun AppNavHost(initialAgentId: String? = null) {
     val context = LocalContext.current
-    val container = (context.applicationContext as CompanionApp).container
+    val graph = (context.applicationContext as CompanionApp).graph
     val navController = rememberNavController()
     // Survives recreation so a notification deep link only navigates once.
     var deepLinkConsumed by rememberSaveable { mutableStateOf(false) }
 
     // Gate on the (async) DataStore read so we pick the right start destination once.
     val hasKey by produceState<Boolean?>(initialValue = null) {
-        value = container.apiKeyStore.get() != null
+        value = graph.apiKeyStore.get() != null
     }
 
     when (hasKey) {

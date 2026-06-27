@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.metro)
 }
 
 // Release signing is opt-in: present only when keystore.properties exists
@@ -68,6 +69,15 @@ kotlin {
     }
 }
 
+// Metro DI (compiler plugin). Low-overhead tracing stays on from day one; the
+// heavier graph reports (generateMetroGraphMetadata / analyzeMetroGraph /
+// generateMetroGraphHtml) are CLI-gated — they only register when
+// reportsDestination is present, e.g.:
+//   ./gradlew :app:generateMetroGraphHtml -Pmetro.reportsDestination=metro/reports --rerun-tasks
+metro {
+    traceDestination.set(layout.buildDirectory.dir("metro/traces"))
+}
+
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.core.ktx)
@@ -88,6 +98,8 @@ dependencies {
     implementation(libs.okhttp.logging)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.metrox.viewmodel)
+    implementation(libs.metrox.viewmodel.compose)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)
 }

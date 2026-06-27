@@ -13,6 +13,13 @@ import com.vibecode.companion.data.api.RunStatus
 import com.vibecode.companion.data.api.RunStreamClient
 import com.vibecode.companion.data.api.RunStreamEvent
 import com.vibecode.companion.data.storage.PromptStore
+import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.Assisted
+import dev.zacsweers.metro.AssistedFactory
+import dev.zacsweers.metro.AssistedInject
+import dev.zacsweers.metro.ContributesIntoMap
+import dev.zacsweers.metrox.viewmodel.ManualViewModelAssistedFactory
+import dev.zacsweers.metrox.viewmodel.ManualViewModelAssistedFactoryKey
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -80,12 +87,25 @@ data class AgentDetailUiState(
  * newest run over SSE with Last-Event-ID resume + exponential backoff, sends
  * follow-ups, and cancels runs.
  */
+@AssistedInject
 class AgentDetailViewModel(
     private val apiClient: CursorApiClient,
     private val runStreamClient: RunStreamClient,
     private val promptStore: PromptStore,
-    private val agentId: String,
+    @Assisted private val agentId: String,
 ) : ViewModel() {
+
+    /**
+     * Manual assisted factory: the runtime [agentId] is supplied at the call site
+     * (`assistedMetroViewModel`), not from the graph. Contributed as the *factory* into the
+     * MetroX manual-assisted multibinding — never `@ContributesIntoMap` the assisted VM itself.
+     */
+    @AssistedFactory
+    @ManualViewModelAssistedFactoryKey
+    @ContributesIntoMap(AppScope::class)
+    interface Factory : ManualViewModelAssistedFactory {
+        fun create(agentId: String): AgentDetailViewModel
+    }
 
     private companion object {
         const val MAX_RECONNECT_ATTEMPTS = 5

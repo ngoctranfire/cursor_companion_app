@@ -61,8 +61,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.zacsweers.metrox.viewmodel.metroViewModel
 import com.vibecode.companion.data.api.ModelListItem
-import com.vibecode.companion.ui.common.companionViewModel
 import com.vibecode.companion.ui.common.relativeTime
 import com.vibecode.companion.ui.theme.GradientButton
 import java.time.Instant
@@ -74,9 +74,7 @@ private fun repoDisplayName(url: String): String =
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LaunchScreen(onLaunched: (agentId: String) -> Unit, onBack: () -> Unit) {
-    val vm = companionViewModel { container ->
-        LaunchViewModel(container.apiClient, container.repoCache, container.promptStore)
-    }
+    val vm: LaunchViewModel = metroViewModel()
     val state by vm.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
