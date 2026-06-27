@@ -415,20 +415,33 @@ fun PastRunCard(run: Run, modifier: Modifier = Modifier, onViewSteps: (() -> Uni
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                StatusPill(run.status)
-                Text(
-                    text = relativeTime(run.updatedAt),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (run.durationMs != null) {
+                // The metadata cluster takes the flexible space (and ellipsizes),
+                // so the non-weighted "View steps" button is measured first and keeps
+                // its intrinsic single-line width instead of being squeezed into the
+                // leftover — mirrors GitSection's "Open PR" row above.
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    StatusPill(run.status)
                     Text(
-                        text = formatDuration(run.durationMs),
+                        text = relativeTime(run.updatedAt),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                    if (run.durationMs != null) {
+                        Text(
+                            text = formatDuration(run.durationMs),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
-                Spacer(Modifier.weight(1f))
                 if (onViewSteps != null) {
                     OutlineActionButton(
                         text = "View steps",

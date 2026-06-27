@@ -150,6 +150,10 @@ fun OutlineActionButton(
                 text,
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurface,
+                // Labels are short, single-line actions; never wrap. Safe because
+                // callers give the button its intrinsic width (see PastRunCard).
+                maxLines = 1,
+                softWrap = false,
             )
         }
     }
