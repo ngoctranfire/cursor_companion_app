@@ -67,6 +67,30 @@ class PastRunCardScreenshotTest {
             .captureRoboImage("src/test/screenshots/PastRunCard_viewSteps.png")
     }
 
+    /**
+     * Verifies that a constrained [PastRunCard] moves the duration as a whole
+     * metadata item instead of ellipsizing it into a partial value.
+     */
+    @Test
+    fun pastRunCard_narrowWidth_keepsDurationWhole() {
+        composeRule.setContent {
+            CompanionTheme {
+                Box(
+                    modifier = Modifier
+                        .testTag(CARD_TAG)
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(16.dp)
+                        .width(300.dp),
+                ) {
+                    PastRunCard(run = SCREENSHOT_RUN, onViewSteps = {})
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag(CARD_TAG)
+            .captureRoboImage("src/test/screenshots/PastRunCard_narrowDuration.png")
+    }
+
     private companion object {
         const val CARD_TAG = "past_run_card"
 

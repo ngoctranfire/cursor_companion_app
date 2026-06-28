@@ -16,6 +16,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -415,14 +416,15 @@ fun PastRunCard(run: Run, modifier: Modifier = Modifier, onViewSteps: (() -> Uni
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                // The metadata cluster takes the flexible space (and ellipsizes),
+                // The metadata cluster takes the flexible space (and wraps whole items),
                 // so the non-weighted "View steps" button is measured first and keeps
                 // its intrinsic single-line width instead of being squeezed into the
                 // leftover — mirrors GitSection's "Open PR" row above.
-                Row(
+                FlowRow(
                     modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
                     StatusPill(run.status)
                     Text(
@@ -433,12 +435,12 @@ fun PastRunCard(run: Run, modifier: Modifier = Modifier, onViewSteps: (() -> Uni
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (run.durationMs != null) {
+                        // No ellipsis here: FlowRow wraps the duration as a whole item to avoid partial values.
                         Text(
                             text = formatDuration(run.durationMs),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
