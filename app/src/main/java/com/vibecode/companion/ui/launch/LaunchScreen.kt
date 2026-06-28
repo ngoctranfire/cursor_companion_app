@@ -71,7 +71,11 @@ import java.time.Instant
 private fun repoDisplayName(url: String): String =
     url.removePrefix("https://github.com/").removeSuffix(".git").trimEnd('/')
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Stateful launch screen: binds [LaunchViewModel], navigates away on a
+ * successful launch, relays launch errors to a snackbar, and renders
+ * [LaunchContent].
+ */
 @Composable
 fun LaunchScreen(onLaunched: (agentId: String) -> Unit, onBack: () -> Unit) {
     val vm: LaunchViewModel = metroViewModel()
@@ -93,6 +97,54 @@ fun LaunchScreen(onLaunched: (agentId: String) -> Unit, onBack: () -> Unit) {
         }
     }
 
+    LaunchContent(
+        state = state,
+        snackbarHostState = snackbarHostState,
+        onBack = onBack,
+        onPromptChange = vm::setPrompt,
+        onVoiceResult = vm::appendVoiceText,
+        onSelectRepo = vm::selectRepo,
+        onRefreshRepos = vm::refreshRepos,
+        onSelectModel = vm::selectModel,
+        onAutoCreatePrChange = vm::setAutoCreatePr,
+        onPlanModeChange = vm::setPlanMode,
+        onLaunch = vm::launch,
+    )
+}
+
+/**
+ * Stateless launch UI: the prompt hero (with voice dictation), the repo + model
+ * configuration card, the PR/mode option toggles, and the gradient launch
+ * button. Rendered purely from [state] plus callbacks so it can be
+ * screenshot-tested from fixtures.
+ *
+ * @param state the launch UI state to render.
+ * @param snackbarHostState host for transient launch-error messages.
+ * @param onBack invoked by the top-bar back button.
+ * @param onPromptChange invoked as the prompt text changes.
+ * @param onVoiceResult invoked with dictated text to append to the prompt.
+ * @param onSelectRepo invoked with the chosen repository URL.
+ * @param onRefreshRepos invoked to re-fetch the repository list.
+ * @param onSelectModel invoked with the chosen model id (null = "Default").
+ * @param onAutoCreatePrChange invoked when the "create PR" toggle changes.
+ * @param onPlanModeChange invoked when the Agent/Plan mode selection changes.
+ * @param onLaunch invoked to create the agent from the current selection.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LaunchContent(
+    state: LaunchUiState,
+    snackbarHostState: SnackbarHostState,
+    onBack: () -> Unit,
+    onPromptChange: (String) -> Unit,
+    onVoiceResult: (String) -> Unit,
+    onSelectRepo: (String) -> Unit,
+    onRefreshRepos: () -> Unit,
+    onSelectModel: (String?) -> Unit,
+    onAutoCreatePrChange: (Boolean) -> Unit,
+    onPlanModeChange: (Boolean) -> Unit,
+    onLaunch: () -> Unit,
+) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -122,8 +174,8 @@ fun LaunchScreen(onLaunched: (agentId: String) -> Unit, onBack: () -> Unit) {
         ) {
             PromptHeroCard(
                 prompt = state.prompt,
-                onPromptChange = vm::setPrompt,
-                onVoiceResult = vm::appendVoiceText,
+                onPromptChange = onPromptChange,
+                onVoiceResult = onVoiceResult,
             )
 
             ConfigurationSection(
@@ -132,23 +184,23 @@ fun LaunchScreen(onLaunched: (agentId: String) -> Unit, onBack: () -> Unit) {
                 reposLoading = state.reposLoading,
                 repoError = state.repoError,
                 repoFetchedAtEpochMs = state.repoFetchedAtEpochMs,
-                onSelectRepo = vm::selectRepo,
-                onRefreshRepos = vm::refreshRepos,
+                onSelectRepo = onSelectRepo,
+                onRefreshRepos = onRefreshRepos,
                 models = state.models,
                 selectedModelId = state.selectedModelId,
-                onSelectModel = vm::selectModel,
+                onSelectModel = onSelectModel,
             )
 
             OptionsSection(
                 autoCreatePr = state.autoCreatePr,
-                onAutoCreatePrChange = vm::setAutoCreatePr,
+                onAutoCreatePrChange = onAutoCreatePrChange,
                 planMode = state.planMode,
-                onPlanModeChange = vm::setPlanMode,
+                onPlanModeChange = onPlanModeChange,
             )
 
             GradientButton(
                 text = if (state.launching) "Launching…" else "Launch agent",
-                onClick = vm::launch,
+                onClick = onLaunch,
                 enabled = state.canLaunch,
                 loading = state.launching,
                 leading = {
@@ -378,6 +430,7 @@ private fun OptionsSection(
     }
 }
 
+/** Two-segment Agent/Plan selector choosing how the agent runs. */
 @Composable
 private fun ModePicker(planMode: Boolean, onPlanModeChange: (Boolean) -> Unit) {
     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -416,6 +469,10 @@ private fun ModePicker(planMode: Boolean, onPlanModeChange: (Boolean) -> Unit) {
     }
 }
 
+/**
+ * Repository picker: a read-only dropdown of repo URLs with a refresh action and
+ * supporting text reflecting the loading / error / last-updated state.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RepoSelector(
@@ -515,6 +572,7 @@ private fun RepoSelector(
     }
 }
 
+/** Model picker dropdown; the "Default" entry (null id) lets the server choose. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModelSelector(

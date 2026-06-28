@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vibecode.companion.data.api.Run
 import com.vibecode.companion.data.api.RunGitBranch
 import com.vibecode.companion.data.api.RunStatus
 import dev.zacsweers.metrox.viewmodel.assistedMetroViewModel
@@ -71,7 +72,6 @@ import com.vibecode.companion.ui.theme.runStatusColor
  * Agent detail: live run timeline over SSE, past runs, git/PR links, and a
  * follow-up composer. The heart of the app.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
     // Assisted: the runtime agentId is supplied here (not the graph). Keyed by agentId so each
@@ -96,6 +96,69 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
         vm.consumeMessage()
     }
 
+    AgentDetailContent(
+        state = state,
+        snackbarHostState = snackbarHostState,
+        onBack = onBack,
+        onShareAgentLink = {
+            val agentUrl = state.agent?.url
+            if (agentUrl != null) {
+                // Hand off to desktop: this link opens Cursor Web, whose
+                // "Open in Cursor" button deep-links into the desktop app.
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, agentUrl)
+                }
+                context.startActivity(Intent.createChooser(send, "Share agent link"))
+            }
+        },
+        onRefresh = vm::refresh,
+        onCancelRun = vm::cancelRun,
+        onRetryLoad = vm::retryLoad,
+        onReconnect = vm::reconnect,
+        onViewPastRun = vm::viewPastRun,
+        onViewLatest = vm::viewLatest,
+        onFollowUpTextChange = vm::onFollowUpTextChange,
+        onSendFollowUp = vm::sendFollowUp,
+    )
+}
+
+/**
+ * Stateless agent-detail UI: the status top bar (cancel / share / refresh), the
+ * follow-up composer bottom bar, and the body that switches between loading, a
+ * full-screen load error, and the run timeline ([DetailBody]). Rendered purely
+ * from [state] plus callbacks so each state can be screenshot-tested from
+ * fixtures.
+ *
+ * @param state the agent-detail UI state to render.
+ * @param snackbarHostState host for transient messages.
+ * @param onBack invoked by the top-bar back button.
+ * @param onShareAgentLink invoked to share the agent's Cursor link.
+ * @param onRefresh invoked to re-fetch the agent and its runs.
+ * @param onCancelRun invoked to cancel the in-flight run.
+ * @param onRetryLoad invoked from the full-screen error to reload.
+ * @param onReconnect invoked to re-attach the SSE stream after it drops.
+ * @param onViewPastRun invoked with an earlier run to replay its history.
+ * @param onViewLatest invoked to return from a past run to the latest one.
+ * @param onFollowUpTextChange invoked as the composer text changes.
+ * @param onSendFollowUp invoked to send the composed follow-up.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AgentDetailContent(
+    state: AgentDetailUiState,
+    snackbarHostState: SnackbarHostState,
+    onBack: () -> Unit,
+    onShareAgentLink: () -> Unit,
+    onRefresh: () -> Unit,
+    onCancelRun: () -> Unit,
+    onRetryLoad: () -> Unit,
+    onReconnect: () -> Unit,
+    onViewPastRun: (Run) -> Unit,
+    onViewLatest: () -> Unit,
+    onFollowUpTextChange: (String) -> Unit,
+    onSendFollowUp: () -> Unit,
+) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -145,27 +208,16 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
                 },
                 actions = {
                     if (state.isRunActive) {
-                        TextButton(onClick = vm::cancelRun, enabled = !state.isCancelling) {
+                        TextButton(onClick = onCancelRun, enabled = !state.isCancelling) {
                             Text("Cancel run", color = MaterialTheme.colorScheme.error)
                         }
                     }
-                    val agentUrl = state.agent?.url
-                    if (agentUrl != null) {
-                        IconButton(
-                            onClick = {
-                                // Hand off to desktop: this link opens Cursor Web, whose
-                                // "Open in Cursor" button deep-links into the desktop app.
-                                val send = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_TEXT, agentUrl)
-                                }
-                                context.startActivity(Intent.createChooser(send, "Share agent link"))
-                            },
-                        ) {
+                    if (state.agent?.url != null) {
+                        IconButton(onClick = onShareAgentLink) {
                             Icon(Icons.Default.Share, contentDescription = "Share agent link")
                         }
                     }
-                    IconButton(onClick = vm::refresh) {
+                    IconButton(onClick = onRefresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
                 },
@@ -174,8 +226,8 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
         bottomBar = {
             FollowUpComposer(
                 text = state.followUpText,
-                onTextChange = vm::onFollowUpTextChange,
-                onSend = vm::sendFollowUp,
+                onTextChange = onFollowUpTextChange,
+                onSend = onSendFollowUp,
                 isSending = state.isSending,
             )
         },
@@ -209,22 +261,27 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 GradientButton(
                     text = "Retry",
-                    onClick = vm::retryLoad,
+                    onClick = onRetryLoad,
                     modifier = Modifier.width(200.dp),
                 )
             }
 
             else -> DetailBody(
                 state = state,
-                onReconnect = vm::reconnect,
-                onViewPastRun = vm::viewPastRun,
-                onViewLatest = vm::viewLatest,
+                onReconnect = onReconnect,
+                onViewPastRun = onViewPastRun,
+                onViewLatest = onViewLatest,
                 contentPadding = padding,
             )
         }
     }
 }
 
+/**
+ * Scrollable run view: earlier runs, the active or replayed run's timeline, the
+ * live / reconnect indicators, and the branches & PRs card. Auto-scrolls to new
+ * timeline items while the list is already near the bottom.
+ */
 @Composable
 private fun DetailBody(
     state: AgentDetailUiState,
@@ -398,12 +455,14 @@ private fun DetailBody(
     }
 }
 
+/** True when the last visible item is within [threshold] of the end — the cue to keep auto-scrolling as items stream in. */
 private fun LazyListState.isNearBottom(threshold: Int = 3): Boolean {
     val info = layoutInfo
     val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: return true
     return lastVisible >= info.totalItemsCount - 1 - threshold
 }
 
+/** Small uppercase, muted label that titles a section of the timeline. */
 @Composable
 private fun SectionHeader(label: String) {
     Text(
@@ -415,6 +474,10 @@ private fun SectionHeader(label: String) {
     )
 }
 
+/**
+ * Bottom composer for follow-up messages: a multiline text field and a gradient
+ * send button that disables while empty or [isSending].
+ */
 @Composable
 private fun FollowUpComposer(
     text: String,
