@@ -4,6 +4,11 @@
 #   markdownlint — no wrapper config available
 # Re-enable with a real config if/when we adopt them.
 reviews:
+  pre_merge_checks:
+    docstrings:
+      # Kotlin test/screenshot PRs use descriptive test names rather than KDoc on
+      # every fixture helper; keep the warning, but lower the heuristic bar.
+      threshold: 50
   tools:
     detekt:
       enabled: false
