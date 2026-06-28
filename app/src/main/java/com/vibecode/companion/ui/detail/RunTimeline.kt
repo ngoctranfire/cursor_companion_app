@@ -435,6 +435,7 @@ fun PastRunCard(run: Run, modifier: Modifier = Modifier, onViewSteps: (() -> Uni
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (run.durationMs != null) {
+                        // No ellipsis here: FlowRow wraps the duration as a whole item to avoid partial values.
                         Text(
                             text = formatDuration(run.durationMs),
                             style = MaterialTheme.typography.labelMedium,

@@ -7,8 +7,8 @@ reviews:
   pre_merge_checks:
     docstrings:
       # Kotlin test/screenshot PRs use descriptive test names rather than KDoc on
-      # every fixture helper; keep the warning, but lower the heuristic bar.
-      threshold: 50
+      # every fixture helper; keep the warning, but use a realistic heuristic bar.
+      threshold: 65
   tools:
     detekt:
       enabled: false
