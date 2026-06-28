@@ -2,6 +2,7 @@ package com.vibecode.companion.ui.detail
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vibecode.companion.data.api.AgentMode
 import com.vibecode.companion.data.api.CloudAgent
 import com.vibecode.companion.data.api.CreateRunRequest
 import com.vibecode.companion.data.api.CursorApiClient
@@ -13,6 +14,7 @@ import com.vibecode.companion.data.api.RunStatus
 import com.vibecode.companion.data.api.RunStreamClient
 import com.vibecode.companion.data.api.RunStreamEvent
 import com.vibecode.companion.data.storage.PromptStore
+import com.vibecode.companion.data.storage.RunModeStore
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Assisted
 import dev.zacsweers.metro.AssistedFactory
@@ -80,6 +82,12 @@ data class AgentDetailUiState(
     val followUpText: String = "",
     val isSending: Boolean = false,
     val isCancelling: Boolean = false,
+    /**
+     * The agent's latest recorded launch mode (`plan` / `agent`, see [AgentMode]), or `null`
+     * when unknown — e.g. the agent was launched outside this app or before mode was persisted.
+     * Read from [RunModeStore]; this is the signal CUR-8's "Build" action will gate on.
+     */
+    val latestMode: String? = null,
     /** One-shot snackbar message. */
     val transientMessage: String? = null,
 ) {
@@ -97,6 +105,7 @@ class AgentDetailViewModel(
     private val apiClient: CursorApiClient,
     private val runStreamClient: RunStreamClient,
     private val promptStore: PromptStore,
+    private val runModeStore: RunModeStore,
     @Assisted private val agentId: String,
 ) : ViewModel() {
 
@@ -238,6 +247,11 @@ class AgentDetailViewModel(
                 // A stale in-flight load must not overwrite the just-created run.
                 loadJob?.cancel()
                 promptStore.save(run.id, text)
+                // A follow-up inherits the agent's current mode (the request sends none, so the
+                // server continues in that mode). Persist it for this run too, keeping the
+                // agent's latest-mode signal accurate; default to agent mode if nothing's known.
+                val inheritedMode = runModeStore.latestModeForAgent(agentId) ?: AgentMode.AGENT
+                runModeStore.recordMode(run.id, agentId, inheritedMode)
                 lastEventId = null
                 lastTextKind = null
                 _uiState.update { state ->
@@ -247,6 +261,7 @@ class AgentDetailViewModel(
                         pastRuns = listOfNotNull(state.newestRun) + state.pastRuns,
                         newestRun = run,
                         liveRunStatus = run.status,
+                        latestMode = inheritedMode,
                         timeline = listOf(TimelineItem.UserPrompt(text)),
                         showReconnect = false,
                     )
@@ -305,6 +320,9 @@ class AgentDetailViewModel(
                 }
                 val seed = runChanged || _uiState.value.timeline.isEmpty()
                 val seedPrompt = if (seed && newest != null) promptStore.get(newest.id) else null
+                // Mode is local-only (the API never returns it) — read the agent's latest so the
+                // UI / CUR-8's Build action can tell whether this agent is in plan mode.
+                val latestMode = runModeStore.latestModeForAgent(agentId)
                 _uiState.update { state ->
                     state.copy(
                         isLoading = false,
@@ -313,6 +331,7 @@ class AgentDetailViewModel(
                         newestRun = newest,
                         pastRuns = runs.drop(1),
                         liveRunStatus = newest?.status,
+                        latestMode = latestMode,
                         timeline = if (seed) {
                             listOfNotNull(seedPrompt?.let { TimelineItem.UserPrompt(it) })
                         } else {

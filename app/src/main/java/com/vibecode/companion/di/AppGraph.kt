@@ -4,8 +4,10 @@ import android.content.Context
 import com.vibecode.companion.data.api.CursorApiClient
 import com.vibecode.companion.data.api.RunStreamClient
 import com.vibecode.companion.data.storage.ApiKeyStore
+import com.vibecode.companion.data.storage.PreferenceProfileStore
 import com.vibecode.companion.data.storage.PromptStore
 import com.vibecode.companion.data.storage.RepoCache
+import com.vibecode.companion.data.storage.RunModeStore
 import com.vibecode.companion.work.CompanionWorkerFactory
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.DependencyGraph
@@ -34,6 +36,8 @@ interface AppGraph : ViewModelGraph {
     val apiKeyStore: ApiKeyStore
     val repoCache: RepoCache
     val promptStore: PromptStore
+    val runModeStore: RunModeStore
+    val preferenceProfileStore: PreferenceProfileStore
     val apiClient: CursorApiClient
     val runStreamClient: RunStreamClient
     val workerFactory: CompanionWorkerFactory

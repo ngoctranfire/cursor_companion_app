@@ -10,8 +10,11 @@ import com.vibecode.companion.data.api.ModelListItem
 import com.vibecode.companion.data.api.ModelRef
 import com.vibecode.companion.data.api.PromptBody
 import com.vibecode.companion.data.api.RepoConfig
+import com.vibecode.companion.data.storage.LaunchDefaults
+import com.vibecode.companion.data.storage.PreferenceProfileStore
 import com.vibecode.companion.data.storage.PromptStore
 import com.vibecode.companion.data.storage.RepoCache
+import com.vibecode.companion.data.storage.RunModeStore
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metro.Inject
@@ -47,9 +50,11 @@ data class LaunchUiState(
 }
 
 /**
- * State holder for the launch screen: loads the repo list (cache-first) and model list, tracks
- * the prompt and launch options, and creates the agent. The launched prompt is saved to
- * [PromptStore] because the API never echoes it back.
+ * State holder for the launch screen: restores the user's saved launch defaults, loads the repo
+ * list (cache-first) and model list, tracks the prompt and launch options, and creates the
+ * agent. The launched prompt is saved to [PromptStore] (the API never echoes it back); the
+ * chosen mode is saved to [RunModeStore] (the API never returns it); and the selections are
+ * saved to [PreferenceProfileStore] so the next launch restores them.
  */
 @Inject
 @ViewModelKey
@@ -58,6 +63,8 @@ class LaunchViewModel(
     private val apiClient: CursorApiClient,
     private val repoCache: RepoCache,
     private val promptStore: PromptStore,
+    private val runModeStore: RunModeStore,
+    private val preferenceProfileStore: PreferenceProfileStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LaunchUiState())
@@ -65,6 +72,17 @@ class LaunchViewModel(
 
     init {
         viewModelScope.launch {
+            // Restore the user's saved launch defaults first, so a returning user lands on their
+            // last repo / model / options. These are local prefs — the API can't supply them.
+            val defaults = preferenceProfileStore.launchDefaults()
+            _uiState.update {
+                it.copy(
+                    selectedRepo = defaults.repoUrl,
+                    selectedModelId = defaults.modelId,
+                    autoCreatePr = defaults.autoCreatePr,
+                    planMode = defaults.mode == AgentMode.PLAN,
+                )
+            }
             val cached = repoCache.get()
             if (cached == null) {
                 // First open with no cache at all — fetch once automatically.
@@ -113,7 +131,12 @@ class LaunchViewModel(
         viewModelScope.launch {
             try {
                 val models = apiClient.listModels().items
-                _uiState.update { it.copy(models = models) }
+                _uiState.update { state ->
+                    // Drop a restored model default the server no longer offers, so the picker
+                    // and the request agree (it falls back to the "Default" model).
+                    val validSelection = state.selectedModelId?.takeIf { id -> models.any { it.id == id } }
+                    state.copy(models = models, selectedModelId = validSelection)
+                }
             } catch (_: CursorApiException) {
                 // Model picker degrades gracefully to "Default" only.
             } catch (_: IOException) {
@@ -151,6 +174,7 @@ class LaunchViewModel(
         val state = _uiState.value
         val repo = state.selectedRepo ?: return
         if (state.prompt.isBlank() || state.launching) return
+        val chosenMode = if (state.planMode) AgentMode.PLAN else AgentMode.AGENT
 
         viewModelScope.launch {
             _uiState.update { it.copy(launching = true, launchError = null) }
@@ -161,12 +185,24 @@ class LaunchViewModel(
                         repos = listOf(RepoConfig(url = repo)),
                         model = state.selectedModelId?.let { ModelRef(it) },
                         autoCreatePR = state.autoCreatePr,
-                        mode = if (state.planMode) AgentMode.PLAN else AgentMode.AGENT,
+                        mode = chosenMode,
                     ),
                 )
                 // Remember the prompt locally — the API never returns it, and the
                 // detail screen renders it at the top of the run timeline.
                 promptStore.save(response.run.id, state.prompt)
+                // Persist the run's mode — the API never returns it, so this is the only way the
+                // detail screen (and CUR-8's Build action) can tell this was a plan-mode launch.
+                runModeStore.recordMode(response.run.id, response.agent.id, chosenMode)
+                // Remember these selections as the user's launch defaults for next time.
+                preferenceProfileStore.saveLaunchDefaults(
+                    LaunchDefaults(
+                        repoUrl = repo,
+                        modelId = state.selectedModelId,
+                        autoCreatePr = state.autoCreatePr,
+                        mode = chosenMode,
+                    ),
+                )
                 _uiState.update { it.copy(launching = false, launchedAgentId = response.agent.id) }
             } catch (ex: CursorApiException) {
                 val message = when (ex.code) {

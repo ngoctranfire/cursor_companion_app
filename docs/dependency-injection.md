@@ -1,6 +1,6 @@
 # Dependency Injection — Metro
 
-> **Status: adoption in progress.** Decision recorded in **ADR-001 — Adopt Metro** (Linear, *Dependency Injection* project). Tracked by **CUR-1** (Kotlin upgrade) → **CUR-2** (conversion). Until those land the app still uses the manual `AppContainer`; this document is the standard for *doing* the conversion and for all DI work afterward.
+> **Status: adopted.** Decision recorded in **ADR-001 — Adopt Metro** (Linear, *Dependency Injection* project); delivered by **CUR-1** (Kotlin upgrade) → **CUR-2** (conversion). The manual `AppContainer` is **gone** — Metro is the only DI in the app. This document is the standard for all DI work.
 
 This is the in-repo, docs-grounded playbook for using [Metro](https://zacsweers.github.io/metro/) correctly in this codebase. Always cross-check against the **version-matched** Metro docs (we pin **1.2.1**): <https://zacsweers.github.io/metro/1.2.1/>.
 
@@ -10,7 +10,7 @@ Compile-time graph safety (Dagger-class, no reflection at runtime) + Kotlin-firs
 
 ## Versions — pin them, bump them together
 
-- **Metro `1.2.1`**. Metro is a **Kotlin compiler plugin, NOT KSP/kapt** — never add KSP for it.
+- **Metro `1.2.1`**. Metro is a **Kotlin compiler plugin, NOT KSP/kapt** — **never add KSP for Metro**. (KSP *is* in the build, but **only** for Room's `room-compiler` annotation processor, pinned to the Kotlin line — see **ADR-002** and `gradle/libs.versions.toml`. Don't route Metro or anything else through it.)
 - Requires **Kotlin** at the version CUR-1 lands (target ~`2.4.0`; confirm against the compat table) and **Gradle 9+**.
 - The compiler-plugin API is **version-locked to `kotlinc`**: not every Metro works with every Kotlin. **Never bump Kotlin without a Metro release that supports it.** Check the table first: <https://zacsweers.github.io/metro/1.2.1/compatibility/>.
 
@@ -28,8 +28,8 @@ Compile-time graph safety (Dagger-class, no reflection at runtime) + Kotlin-firs
 
 | Scope | Lifetime | Holds |
 |---|---|---|
-| `AppScope` (`@SingleIn(AppScope::class)`) | process | `ApiKeyStore`, `RepoCache`, `PromptStore`, `CursorApiClient`, `RunStreamClient` |
-| `AccountScope` | per signed-in account | account-bound data — `ApiKeyStore`/`RepoCache`/`PromptStore` move here when per-account lands (today they're effectively account-scoped via `clearAccountData()`) |
+| `AppScope` (`@SingleIn(AppScope::class)`) | process | `ApiKeyStore`, `RepoCache`, `PromptStore`, `CompanionDatabase` + its `RunModeStore`/`PreferenceProfileStore`, `CursorApiClient`, `RunStreamClient` |
+| `AccountScope` | per signed-in account | account-bound data — the stores above (incl. the Room `CompanionDatabase`) move here when per-account lands. Today they're effectively account-scoped: `AccountStore.clearAccountData()` wipes the DataStore **and** `CompanionDatabase.clearAllTables()` on sign-out |
 | `SessionScope` | per agent run / session | the runtime `agentId` + session-lifetime state |
 
 Define the future scopes (and stub their `@GraphExtension` factories) **now**, even unused, so the shape is locked in. **Metro does not own lifecycle cleanup** — teardown means dropping the extension reference and closing/cancelling any resources you provided.
@@ -45,6 +45,8 @@ interface AppGraph : ViewModelGraph {
   val apiKeyStore: ApiKeyStore
   val repoCache: RepoCache
   val promptStore: PromptStore
+  val runModeStore: RunModeStore               // Room-backed (CompanionDatabase)
+  val preferenceProfileStore: PreferenceProfileStore  // Room-backed (CompanionDatabase)
   val apiClient: CursorApiClient
   val runStreamClient: RunStreamClient
   val workerFactory: CompanionWorkerFactory
@@ -65,7 +67,9 @@ object AppBindings {
   fun apiClient(apiKeyStore: ApiKeyStore): CursorApiClient =
     CursorApiClient(apiKeyProvider = { apiKeyStore.get() })
 
-  // …repoCache, promptStore, runStreamClient similarly
+  // …repoCache, promptStore, runStreamClient similarly. The Room layer follows the
+  // same shape: @Provides the CompanionDatabase, then RunModeStore/PreferenceProfileStore
+  // from its DAOs — plain data-layer classes, Metro-agnostic (see ADR-002).
 }
 ```
 
