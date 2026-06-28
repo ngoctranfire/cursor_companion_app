@@ -37,7 +37,10 @@ interface RunModeDao {
     @Query("SELECT * FROM run_modes WHERE agentId = :agentId ORDER BY recordedAtEpochMs DESC, runId DESC")
     suspend fun runModesForAgent(agentId: String): List<RunModeEntity>
 
-    /** Wipes every recorded run mode — used by the sign-out account-data reset. */
+    /**
+     * Wipes every recorded run mode. Sign-out clears the whole database via
+     * `CompanionDatabase.clearAllTables()`; this targeted delete is for tests/diagnostics.
+     */
     @Query("DELETE FROM run_modes")
     suspend fun clear()
 }

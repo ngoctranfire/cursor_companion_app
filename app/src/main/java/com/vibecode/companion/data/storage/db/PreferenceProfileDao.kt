@@ -34,7 +34,10 @@ interface PreferenceProfileDao {
     @Query("SELECT * FROM preference_profiles ORDER BY id")
     suspend fun allProfiles(): List<PreferenceProfileEntity>
 
-    /** Wipes every profile — used by the sign-out account-data reset. */
+    /**
+     * Wipes every profile. Sign-out clears the whole database via
+     * `CompanionDatabase.clearAllTables()`; this targeted delete is for tests/diagnostics.
+     */
     @Query("DELETE FROM preference_profiles")
     suspend fun clear()
 }
