@@ -248,10 +248,14 @@ class AgentDetailViewModel(
                 loadJob?.cancel()
                 promptStore.save(run.id, text)
                 // A follow-up inherits the agent's current mode (the request sends none, so the
-                // server continues in that mode). Persist it for this run too, keeping the
-                // agent's latest-mode signal accurate; default to agent mode if nothing's known.
-                val inheritedMode = runModeStore.latestModeForAgent(agentId) ?: AgentMode.AGENT
-                runModeStore.recordMode(run.id, agentId, inheritedMode)
+                // server continues in that mode). Only carry it forward when we actually know it:
+                // for legacy or externally-created agents the mode is genuinely unknown, and
+                // stamping a guess (e.g. "agent") would poison the latest-mode signal and
+                // mis-gate CUR-8's Build action. Leave it null/unknown instead.
+                val inheritedMode = runModeStore.latestModeForAgent(agentId)
+                if (inheritedMode != null) {
+                    runModeStore.recordMode(run.id, agentId, inheritedMode)
+                }
                 lastEventId = null
                 lastTextKind = null
                 _uiState.update { state ->

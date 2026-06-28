@@ -134,10 +134,11 @@ Non-obvious rules:
 
 ## Dependency injection (Metro)
 
-We're standardizing DI on **[Metro](https://zacsweers.github.io/metro/1.2.1/)**
-(pinned **1.2.1**), migrating off the manual `AppContainer`. Full playbook:
-**[docs/dependency-injection.md](docs/dependency-injection.md)** — read it before
-touching DI. The non-obvious, mistake-preventing rules:
+DI is **[Metro](https://zacsweers.github.io/metro/1.2.1/)** (pinned **1.2.1**) —
+the only DI mechanism in the app. The migration off the old manual `AppContainer` is
+**complete**; `AppContainer` is gone, so don't reference or reintroduce it. Full
+playbook: **[docs/dependency-injection.md](docs/dependency-injection.md)** — read it
+before touching DI. The non-obvious, mistake-preventing rules:
 
 - Metro is a **Kotlin compiler plugin, not KSP/kapt** — **never add KSP for
   Metro**, and **never bump Kotlin without a compatible Metro release** (the plugin
@@ -159,9 +160,9 @@ touching DI. The non-obvious, mistake-preventing rules:
 
 ## Intentional constraints (don't "fix" these)
 
-- **DI is standardizing on Metro** (migrating off the manual `AppContainer`).
-  Don't introduce Hilt, Koin, Dagger, or fresh hand-rolled wiring — see the
-  **Dependency injection (Metro)** section above.
+- **DI is Metro** (the `AppContainer` migration is done; `AppContainer` no longer
+  exists). Don't introduce Hilt, Koin, Dagger, or fresh hand-rolled wiring, and don't
+  bring back `AppContainer` — see the **Dependency injection (Metro)** section above.
 - **Persistence is split, on purpose** (see **ADR-002** and the Storage section):
   **DataStore Preferences** for the encrypted token and key/value caches, **Room
   (SQLite)** for queryable/relational state (run-mode history, preference profiles).

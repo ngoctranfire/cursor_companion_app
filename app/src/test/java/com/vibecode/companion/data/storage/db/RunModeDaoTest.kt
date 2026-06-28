@@ -64,6 +64,17 @@ class RunModeDaoTest {
     }
 
     @Test
+    fun latestModeForAgent_breaksTimestampTiesByRunIdDesc() = runBlocking {
+        // All three share recordedAtEpochMs, so the `runId DESC` tie-breaker decides the winner
+        // deterministically — "run-c" is the greatest runId and carries "agent".
+        dao.upsert(RunModeEntity(runId = "run-a", agentId = "agentA", mode = "plan", recordedAtEpochMs = 500))
+        dao.upsert(RunModeEntity(runId = "run-c", agentId = "agentA", mode = "agent", recordedAtEpochMs = 500))
+        dao.upsert(RunModeEntity(runId = "run-b", agentId = "agentA", mode = "plan", recordedAtEpochMs = 500))
+
+        assertEquals("agent", dao.latestModeForAgent("agentA"))
+    }
+
+    @Test
     fun latestModeForAgent_isScopedPerAgent() = runBlocking {
         dao.upsert(RunModeEntity(runId = "run1", agentId = "agentA", mode = "plan", recordedAtEpochMs = 100))
         dao.upsert(RunModeEntity(runId = "run2", agentId = "agentB", mode = "agent", recordedAtEpochMs = 200))

@@ -1,9 +1,11 @@
 package com.vibecode.companion.ui.launch
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vibecode.companion.data.api.AgentMode
 import com.vibecode.companion.data.api.CreateAgentRequest
+import com.vibecode.companion.data.api.CreateAgentResponse
 import com.vibecode.companion.data.api.CursorApiClient
 import com.vibecode.companion.data.api.CursorApiException
 import com.vibecode.companion.data.api.ModelListItem
@@ -19,6 +21,7 @@ import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metrox.viewmodel.ViewModelKey
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -69,6 +72,10 @@ class LaunchViewModel(
 
     private val _uiState = MutableStateFlow(LaunchUiState())
     val uiState: StateFlow<LaunchUiState> = _uiState.asStateFlow()
+
+    private companion object {
+        const val TAG = "LaunchViewModel"
+    }
 
     init {
         viewModelScope.launch {
@@ -188,22 +195,11 @@ class LaunchViewModel(
                         mode = chosenMode,
                     ),
                 )
-                // Remember the prompt locally — the API never returns it, and the
-                // detail screen renders it at the top of the run timeline.
-                promptStore.save(response.run.id, state.prompt)
-                // Persist the run's mode — the API never returns it, so this is the only way the
-                // detail screen (and CUR-8's Build action) can tell this was a plan-mode launch.
-                runModeStore.recordMode(response.run.id, response.agent.id, chosenMode)
-                // Remember these selections as the user's launch defaults for next time.
-                preferenceProfileStore.saveLaunchDefaults(
-                    LaunchDefaults(
-                        repoUrl = repo,
-                        modelId = state.selectedModelId,
-                        autoCreatePr = state.autoCreatePr,
-                        mode = chosenMode,
-                    ),
-                )
+                // The remote agent exists now, so navigate to it regardless of whether the
+                // on-device bookkeeping below succeeds — a failed local write must never strand
+                // the user on the launch screen.
                 _uiState.update { it.copy(launching = false, launchedAgentId = response.agent.id) }
+                persistLaunchResult(response, state, chosenMode, repo)
             } catch (ex: CursorApiException) {
                 val message = when (ex.code) {
                     "repository_access" ->
@@ -218,6 +214,44 @@ class LaunchViewModel(
             } catch (_: IOException) {
                 _uiState.update { it.copy(launching = false, launchError = "Check your connection") }
             }
+        }
+    }
+
+    /**
+     * Best-effort local bookkeeping after a successful create: the launched prompt ([PromptStore],
+     * the API never echoes it back), the run's mode ([RunModeStore], the API never returns it),
+     * and the user's launch defaults ([PreferenceProfileStore]). Each write is isolated so one
+     * failure doesn't skip the others, and all are non-fatal — the agent already exists, so a
+     * storage error is logged, not surfaced, and never blocks navigation.
+     */
+    private suspend fun persistLaunchResult(
+        response: CreateAgentResponse,
+        state: LaunchUiState,
+        chosenMode: String,
+        repo: String,
+    ) {
+        bestEffort("launch prompt") { promptStore.save(response.run.id, state.prompt) }
+        bestEffort("run mode") { runModeStore.recordMode(response.run.id, response.agent.id, chosenMode) }
+        bestEffort("launch defaults") {
+            preferenceProfileStore.saveLaunchDefaults(
+                LaunchDefaults(
+                    repoUrl = repo,
+                    modelId = state.selectedModelId,
+                    autoCreatePr = state.autoCreatePr,
+                    mode = chosenMode,
+                ),
+            )
+        }
+    }
+
+    /** Runs a non-essential persistence [block], logging (never throwing) on failure. */
+    private suspend inline fun bestEffort(what: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e // never swallow cancellation — structured concurrency depends on it
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to persist $what after launch", e)
         }
     }
 

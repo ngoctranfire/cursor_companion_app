@@ -73,7 +73,7 @@ object AppBindings {
 }
 ```
 
-In `CompanionApp`, replace `AppContainer(this)` with `createGraphFactory<AppGraph.Factory>().create(this)` (keep `AgentNotifications.ensureChannel(this)` and `PollScheduler.ensureScheduled(this)`).
+`CompanionApp` builds the root graph with `createGraphFactory<AppGraph.Factory>().create(this)` (there is no `AppContainer` anymore), alongside `AgentNotifications.ensureChannel(this)` and `PollScheduler.ensureScheduled(this)`.
 
 ## Graph extensions (per-account / per-session)
 
