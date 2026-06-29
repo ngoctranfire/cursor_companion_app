@@ -21,6 +21,10 @@ import com.vibecode.companion.data.api.RunStatus
 object AgentNotifications {
 
     const val CHANNEL_ID = "agent_status"
+    const val PLAN_READY_CHANNEL_ID = "plan_ready"
+    const val EXTRA_AGENT_ID = "agentId"
+    private const val DETAIL_SCHEME = "agent-companion"
+    private const val MAIN_ACTIVITY_CLASS = "com.vibecode.companion.MainActivity"
 
     /**
      * Fixed notification id — per-agent uniqueness comes from the notification
@@ -28,17 +32,25 @@ object AgentNotifications {
      * across agents.
      */
     private const val RUN_TERMINAL_ID = 1
+    private const val PLAN_READY_ID = 2
 
     fun ensureChannel(context: Context) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channel = NotificationChannel(
+        val statusChannel = NotificationChannel(
             CHANNEL_ID,
             "Agent status",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
             description = "Alerts when a cloud agent run finishes or fails"
         }
-        manager.createNotificationChannel(channel)
+        val planReadyChannel = NotificationChannel(
+            PLAN_READY_CHANNEL_ID,
+            "Plan ready",
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "Alerts when a plan-mode agent is ready for review"
+        }
+        manager.createNotificationChannels(listOf(statusChannel, planReadyChannel))
     }
 
     /**
@@ -62,15 +74,7 @@ object AgentNotifications {
             if (prUrl != null) append(" — PR ready")
         }
 
-        // Class-name intent keeps this file decoupled from MainActivity. The data
-        // URI makes intents for different agents distinct under Intent.filterEquals
-        // (extras don't count), so the system never hands agent A's tap to agent
-        // B's PendingIntent — request codes alone can collide via hashCode.
-        val contentIntent = Intent()
-            .setClassName(context, "com.vibecode.companion.MainActivity")
-            .setData(Uri.fromParts("agent-companion", agentId, null))
-            .putExtra("agentId", agentId)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val contentIntent = agentDetailIntent(context, agentId)
         val contentPending = PendingIntent.getActivity(
             context,
             0,
@@ -99,6 +103,51 @@ object AgentNotifications {
 
         NotificationManagerCompat.from(context).notify(agentId, RUN_TERMINAL_ID, builder.build())
     }
+
+    /**
+     * Posts the plan-specific notification for a plan-mode run that just reached a terminal state.
+     * No-ops under the same permission/app-notification checks as generic status notifications.
+     */
+    @SuppressLint("MissingPermission")
+    fun notifyPlanReady(
+        context: Context,
+        agentId: String,
+        agentName: String?,
+    ) {
+        if (!canNotify(context)) return
+        ensureChannel(context)
+
+        val contentPending = PendingIntent.getActivity(
+            context,
+            0,
+            agentDetailIntent(context, agentId),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        val text = agentName?.let { "$it has a plan ready to review." }
+            ?: "An agent has a plan ready to review."
+        val notification = NotificationCompat.Builder(context, PLAN_READY_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setContentTitle("Plan ready - review and build")
+            .setContentText(text)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(contentPending)
+            .setAutoCancel(true)
+            .build()
+
+        NotificationManagerCompat.from(context).notify(agentId, PLAN_READY_ID, notification)
+    }
+
+    internal fun agentDetailIntent(context: Context, agentId: String): Intent =
+        Intent()
+            .setClassName(context, MAIN_ACTIVITY_CLASS)
+            .setData(Uri.fromParts(DETAIL_SCHEME, agentId, null))
+            .putExtra(EXTRA_AGENT_ID, agentId)
+            .addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP,
+            )
 
     private fun canNotify(context: Context): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
