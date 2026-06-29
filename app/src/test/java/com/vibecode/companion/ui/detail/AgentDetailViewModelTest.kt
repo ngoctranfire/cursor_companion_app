@@ -21,6 +21,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -91,6 +92,31 @@ class AgentDetailViewModelTest {
             db.runModeDao().runModesForAgent(agentId).isEmpty(),
         )
         assertNull(db.runModeDao().modeForRun("runNew"))
+    }
+
+    @Test
+    fun latestMode_updatesReactively_whenModePersistedAfterLoad() = runBlocking {
+        val agentId = "agentY"
+        // The newest run is the one the launch screen just created; its mode is persisted in the
+        // background AFTER navigation, so load() here runs before any mode row exists.
+        val newest = run(id = "runNew", agentId = agentId)
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(newest)) },
+            onGetRun = { _, _ -> newest },
+        )
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+
+        // After load() there is no recorded mode yet → latestMode is null (Build stays hidden).
+        vm.awaitState { !it.isLoading && it.newestRun?.id == "runNew" }
+        assertNull("no mode recorded yet → latestMode null", vm.uiState.value.latestMode)
+
+        // Mode persisted AFTER load() — the reactive observer must flip latestMode without a manual
+        // refresh. A one-shot read at load time would leave this null forever (the bug this guards).
+        runModeStore.recordMode("runNew", agentId, "plan")
+
+        vm.awaitState { it.latestMode == "plan" } // times out if the mode isn't observed reactively
+        assertEquals("plan", vm.uiState.value.latestMode)
     }
 
     private suspend fun AgentDetailViewModel.awaitState(predicate: (AgentDetailUiState) -> Boolean) {

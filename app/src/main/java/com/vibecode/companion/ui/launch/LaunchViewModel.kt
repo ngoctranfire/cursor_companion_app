@@ -12,18 +12,17 @@ import com.vibecode.companion.data.api.ModelListItem
 import com.vibecode.companion.data.api.ModelRef
 import com.vibecode.companion.data.api.PromptBody
 import com.vibecode.companion.data.api.RepoConfig
+import com.vibecode.companion.data.storage.AccountWriteCoordinator
 import com.vibecode.companion.data.storage.LaunchDefaults
 import com.vibecode.companion.data.storage.PreferenceProfileStore
 import com.vibecode.companion.data.storage.PromptStore
 import com.vibecode.companion.data.storage.RepoCache
 import com.vibecode.companion.data.storage.RunModeStore
-import com.vibecode.companion.di.AppCoroutineScope
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metrox.viewmodel.ViewModelKey
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -81,7 +80,7 @@ class LaunchViewModel(
     private val promptStore: PromptStore,
     private val runModeStore: RunModeStore,
     private val preferenceProfileStore: PreferenceProfileStore,
-    @AppCoroutineScope private val appScope: CoroutineScope,
+    private val writeCoordinator: AccountWriteCoordinator,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LaunchUiState())
@@ -233,11 +232,13 @@ class LaunchViewModel(
                 // on-device bookkeeping below succeeds — a failed local write must never strand
                 // the user on the launch screen.
                 _uiState.update { it.copy(launching = false, launchedAgentId = response.agent.id) }
-                // Persist on the app scope, not viewModelScope: publishing launchedAgentId above
-                // pops the launch screen and clears this VM, cancelling viewModelScope and aborting
-                // these writes mid-flight. The app scope outlives the screen so the prompt / run
-                // mode / launch defaults are durably saved even on a fast navigation away.
-                appScope.launch { persistLaunchResult(response, state, chosenMode, repo) }
+                // Persist through the coordinator's durable scope, not viewModelScope: publishing
+                // launchedAgentId above pops the launch screen and clears this VM, cancelling
+                // viewModelScope and aborting these writes mid-flight. The coordinator's scope
+                // outlives the screen so the prompt / run mode / launch defaults are durably saved
+                // even on a fast navigation away — yet a concurrent sign-out cancels these writes
+                // before wiping the stores, so they can't resurrect this account's data afterward.
+                writeCoordinator.launchWrite { persistLaunchResult(response, state, chosenMode, repo) }
             } catch (ex: CursorApiException) {
                 val message = when (ex.code) {
                     "repository_access" ->

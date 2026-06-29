@@ -2,6 +2,7 @@ package com.vibecode.companion.data.storage
 
 import com.vibecode.companion.data.storage.db.RunModeDao
 import com.vibecode.companion.data.storage.db.RunModeEntity
+import kotlinx.coroutines.flow.Flow
 
 /**
  * Records and recalls the launch mode (`plan` / `agent`) of each Cursor run.
@@ -31,4 +32,12 @@ class RunModeStore(private val dao: RunModeDao) {
 
     /** The mode [runId] was created in, or `null` if this app never recorded one for it. */
     suspend fun modeForRun(runId: String): String? = dao.modeForRun(runId)
+
+    /**
+     * Observes [runId]'s mode, emitting `null` until one is recorded and then the recorded value.
+     * The detail screen collects this so a mode persisted *after* it loaded (the launch screen
+     * records the initial run's mode in the background, after navigation) updates the UI instead
+     * of leaving the "Build" signal stuck on the load-time snapshot.
+     */
+    fun modeForRunFlow(runId: String): Flow<String?> = dao.modeForRunFlow(runId)
 }

@@ -24,6 +24,7 @@ import java.io.IOException
 class AccountStore(
     @AppContext private val context: Context,
     private val database: CompanionDatabase,
+    private val writeCoordinator: AccountWriteCoordinator,
 ) {
 
     /**
@@ -34,6 +35,12 @@ class AccountStore(
      * schema and the Keystore-held AES key survive; only their *contents* go. The default
      * preference profile is re-seeded lazily on the next launch (see [PreferenceProfileStore]).
      *
+     * The wipe runs through [AccountWriteCoordinator.wipe], which cancels and joins any in-flight
+     * fire-and-forget account write (e.g. `LaunchViewModel`'s post-launch bookkeeping) **before**
+     * clearing the stores. Without that, a write still in flight at sign-out could persist the
+     * *previous* account's data back into the freshly cleared stores, re-opening the cross-account
+     * leak through a new race.
+     *
      * Ordering matters: Room is cleared **first** so a failure leaves the previous account fully
      * intact rather than half-wiped — if the DataStore (API key + state) were cleared first and
      * then the Room call threw, the `run_modes` / `preference_profiles` rows would linger on disk
@@ -43,7 +50,7 @@ class AccountStore(
      *
      * @throws IOException if either backing store fails to clear.
      */
-    suspend fun clearAccountData() {
+    suspend fun clearAccountData() = writeCoordinator.wipe {
         // clearAllTables() runs its own transaction and must not be called on the main thread.
         try {
             withContext(Dispatchers.IO) { database.clearAllTables() }

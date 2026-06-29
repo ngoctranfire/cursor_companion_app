@@ -4,13 +4,15 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
 
 /**
  * Data access for [RunModeEntity] — the per-run launch-mode log.
  *
- * Reads are suspend (one-shot) rather than `Flow`: callers (`LaunchViewModel`,
- * `AgentDetailViewModel`) record on create/follow-up and read on screen load, so they don't
- * need to observe live changes. Plain class, no DI annotations — wiring lives in `di/`.
+ * Most reads are suspend (one-shot); [modeForRunFlow] is the exception — the detail screen
+ * *observes* the newest run's mode so a mode persisted **after** the screen loaded (the launch
+ * screen records the initial run's mode in the background, after navigation) still lights up
+ * CUR-8's "Build" action. Plain class, no DI annotations — wiring lives in `di/`.
  */
 @Dao
 interface RunModeDao {
@@ -22,6 +24,15 @@ interface RunModeDao {
     /** The mode a specific run was created in, or `null` if this app never recorded one for it. */
     @Query("SELECT mode FROM run_modes WHERE runId = :runId")
     suspend fun modeForRun(runId: String): String?
+
+    /**
+     * Observes [runId]'s mode, emitting `null` until one is recorded and the new value whenever it
+     * changes. Lets the detail screen pick up a mode persisted *after* it loaded (e.g. the launch
+     * screen's background `recordMode` for the initial run) instead of staying stuck on the
+     * one-shot snapshot it read at load time.
+     */
+    @Query("SELECT mode FROM run_modes WHERE runId = :runId")
+    fun modeForRunFlow(runId: String): Flow<String?>
 
     /**
      * The most recently recorded mode for [agentId] (newest [RunModeEntity.recordedAtEpochMs]

@@ -10,6 +10,7 @@ import com.vibecode.companion.data.api.ListRepositoriesResponse
 import com.vibecode.companion.data.api.ModelListItem
 import com.vibecode.companion.data.api.Repository
 import com.vibecode.companion.data.api.Run
+import com.vibecode.companion.data.storage.AccountWriteCoordinator
 import com.vibecode.companion.data.storage.LaunchDefaults
 import com.vibecode.companion.data.storage.PreferenceProfileStore
 import com.vibecode.companion.data.storage.PromptStore
@@ -59,9 +60,16 @@ class LaunchViewModelTest {
     private lateinit var runModeStore: RunModeStore
     private lateinit var preferenceProfileStore: PreferenceProfileStore
     private lateinit var appScope: CoroutineScope
+    private lateinit var writeCoordinator: AccountWriteCoordinator
 
     @Before
     fun setUp() {
+        // Main = Unconfined under runBlocking, deliberately NOT a StandardTestDispatcher under
+        // runTest: these tests drive real Room + DataStore, which run on their own background
+        // executors. Virtual-time `runTest` would let `withTimeout` state-awaits fire before those
+        // real callbacks land, making the suite flaky. Unconfined keeps the VM's launched
+        // coroutines eager so the in-flight-fetch windows are observable, while `withTimeout` stays
+        // real wall-clock.
         Dispatchers.setMain(Dispatchers.Unconfined)
         context = RuntimeEnvironment.getApplication()
         runBlocking { context.companionDataStore.edit { it.clear() } } // isolate DataStore between tests
@@ -71,8 +79,12 @@ class LaunchViewModelTest {
         promptStore = PromptStore(context)
         runModeStore = RunModeStore(db.runModeDao())
         preferenceProfileStore = PreferenceProfileStore(db.preferenceProfileDao())
-        // Stand-in for the @AppCoroutineScope singleton — survives the (simulated) VM clear.
-        appScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        // Stand-in for the @AppCoroutineScope singleton — survives the (simulated) VM clear. Uses a
+        // distinct real dispatcher (production uses Dispatchers.Default) rather than sharing Main's
+        // Unconfined, so the app-scope↔main boundary the post-nav-persistence test relies on is a
+        // genuine async hop, not collapsed onto the main dispatcher.
+        appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        writeCoordinator = AccountWriteCoordinator(appScope)
     }
 
     @After
@@ -83,7 +95,7 @@ class LaunchViewModelTest {
     }
 
     private fun viewModel(api: FakeCursorApiClient) = LaunchViewModel(
-        api, repoCache, promptStore, runModeStore, preferenceProfileStore, appScope,
+        api, repoCache, promptStore, runModeStore, preferenceProfileStore, writeCoordinator,
     )
 
     @Test
@@ -146,7 +158,13 @@ class LaunchViewModelTest {
         }
         assertEquals("build the thing", promptStore.get("run1"))
         assertEquals("agent", db.runModeDao().modeForRun("run1"))
-        assertEquals("repoA", preferenceProfileStore.launchDefaults().repoUrl)
+        // persistLaunchResult writes the full LaunchDefaults, not just the repo — assert every
+        // field so a regression that drops mode / modelId / autoCreatePr can't slip through.
+        val defaults = preferenceProfileStore.launchDefaults()
+        assertEquals("repoA", defaults.repoUrl)
+        assertEquals("agent", defaults.mode) // planMode defaults to false → AGENT
+        assertNull("no model selected → Default (null id) persisted", defaults.modelId)
+        assertTrue("autoCreatePr defaults to true", defaults.autoCreatePr)
     }
 
     @Test

@@ -135,6 +135,10 @@ class AgentDetailViewModel(
     private var loadJob: Job? = null
     private var lastEventId: String? = null
 
+    /** Live collector of the newest run's mode, plus the run id it's keyed to (re-subscribes on change). */
+    private var modeJob: Job? = null
+    private var observedModeRunId: String? = null
+
     /** Kind of the previous text-producing SSE event, for delta coalescing. */
     private enum class TextKind { ASSISTANT, THINKING }
 
@@ -274,6 +278,9 @@ class AgentDetailViewModel(
                         showReconnect = false,
                     )
                 }
+                // Re-key the mode observer to the new newest run (set eagerly above for no flicker;
+                // observed so any later write to this run's mode keeps latestMode current).
+                observeMode(run.id)
                 startStreaming(run.id)
             } catch (ex: CursorApiException) {
                 val message = when (ex.code) {
@@ -328,13 +335,6 @@ class AgentDetailViewModel(
                 }
                 val seed = runChanged || _uiState.value.timeline.isEmpty()
                 val seedPrompt = if (seed && newest != null) promptStore.get(newest.id) else null
-                // Mode is local-only (the API never returns it). Derive it from the NEWEST run's
-                // persisted mode — not the agent's last-recorded mode, which can be stale relative
-                // to the server's newest run (e.g. a plan-mode agent whose latest run was started
-                // elsewhere). A newest run with no recorded mode (legacy/external run, or one
-                // created before mode persistence) stays null, so CUR-8 hides "Build" rather than
-                // defaulting to "agent" and wrongly enabling it.
-                val latestMode = newest?.let { runModeStore.modeForRun(it.id) }
                 _uiState.update { state ->
                     state.copy(
                         isLoading = false,
@@ -343,7 +343,6 @@ class AgentDetailViewModel(
                         newestRun = newest,
                         pastRuns = runs.drop(1),
                         liveRunStatus = newest?.status,
-                        latestMode = latestMode,
                         timeline = if (seed) {
                             listOfNotNull(seedPrompt?.let { TimelineItem.UserPrompt(it) })
                         } else {
@@ -352,6 +351,11 @@ class AgentDetailViewModel(
                         viewedPastRun = if (runChanged) null else state.viewedPastRun,
                     )
                 }
+                // Mode is local-only (the API never returns it). Observe the NEWEST run's persisted
+                // mode reactively so a mode written *after* this load (the launch screen records the
+                // initial run's mode in the background, after navigation) still updates latestMode —
+                // a one-shot read here would miss that late write and leave Build hidden forever.
+                observeMode(newest?.id)
                 if (newest != null && !RunStatus.isTerminal(newest.status)) {
                     if (runChanged || streamJob?.isActive != true) startStreaming(newest.id)
                 } else if (newest != null && seed) {
@@ -366,6 +370,31 @@ class AgentDetailViewModel(
                 reportLoadFailure(ex.message)
             } catch (ex: IOException) {
                 reportLoadFailure("Check your connection")
+            }
+        }
+    }
+
+    /**
+     * (Re)subscribes [latestMode] to [runId]'s mode. Keyed to the run id so it re-subscribes only
+     * when the newest run changes; a `null` run id (no runs) clears the mode. The collected Flow
+     * keeps the value live, so a mode persisted after subscription — e.g. the launch screen's
+     * background `recordMode` for the just-launched run — flips `latestMode` from null to the real
+     * mode without the screen needing a manual refresh. A newest run that never gets a recorded
+     * mode (legacy/external run, or one created before mode persistence) simply stays null, so
+     * CUR-8 hides "Build" rather than wrongly defaulting it to "agent".
+     */
+    private fun observeMode(runId: String?) {
+        if (runId == observedModeRunId && modeJob?.isActive == true) return
+        observedModeRunId = runId
+        modeJob?.cancel()
+        if (runId == null) {
+            modeJob = null
+            _uiState.update { it.copy(latestMode = null) }
+            return
+        }
+        modeJob = viewModelScope.launch {
+            runModeStore.modeForRunFlow(runId).collect { mode ->
+                _uiState.update { it.copy(latestMode = mode) }
             }
         }
     }
