@@ -5,10 +5,13 @@ just points here. **[README.md](README.md)** covers what the app is, how to
 build/run it, and the project layout — this file is only the non-obvious rules
 that keep changes from silently breaking things. Don't repeat the README here.
 
-## PR review workflow (CodeRabbit)
+## PR review workflow (CodeRabbit + Macroscope)
 
-Every PR is reviewed by **CodeRabbit** before a human merges. A green build is
-**not** enough to merge — run the review loop to completion first:
+Every PR is reviewed by automated reviewers — **CodeRabbit** and **Macroscope**
+— before a human merges. A green build is **not** enough to merge — run the
+review loop to completion first. **Every finding gets a reply on its own thread,
+and then the thread gets resolved**, so the human can see at a glance what each
+fix round actually addressed (see "Reply on the thread, then resolve it" below):
 
 1. **Open the PR and let CodeRabbit review it.** It runs automatically on a new
    PR; if it hasn't, comment `@coderabbitai review` to trigger it. Read its
@@ -47,14 +50,51 @@ Every PR is reviewed by **CodeRabbit** before a human merges. A green build is
      why). Never apply it blindly.
    Confirm each item is either fixed or has a recorded reason it's safe before
    moving on.
-4. **Loop until CodeRabbit is fully clean** — **no actionable comments**, every
-   thread (nitpicks included) resolved, and **pre-merge checks green**. Don't
-   merge while anything is open or unanswered.
-5. **Human merges.** Once CodeRabbit is satisfied and the human has reviewed,
-   **the human** merges — agents never merge.
+4. **Reply on each thread, then resolve it.** For *every* CodeRabbit/Macroscope
+   finding, post a reply **on that comment's own thread** recording the
+   determination — `Fixed in <commit-sha>: <what changed>`, or `Skipped —
+   <reason>` for a false positive / intentional design — then mark the thread
+   **resolved**. This is what gives the human a visible, per-thread audit trail
+   of what each round fixed; an unanswered or unresolved thread reads as
+   "ignored." Replies/resolves use the repo's `gh` credentials, so they show as
+   authored by the human.
+5. **Loop until both bots are fully clean** — **no actionable comments**, every
+   thread (nitpicks included) replied-to **and** resolved, and **pre-merge
+   checks green**. Don't merge while anything is open or unanswered.
+6. **Human merges.** Once the reviewers are satisfied and the human has
+   reviewed, **the human** merges — agents never merge.
 
 This is in addition to (not a replacement for) independent cross-vendor review of
 the diff.
+
+### Reply on the thread, then resolve it (mechanics)
+
+Keep this repeatable — any agent should do it the same way, at the end of each
+fix round after the change is pushed and cross-review confirms it:
+
+1. **List the review threads** (thread `id` + resolved state + first comment
+   `databaseId`) via GraphQL:
+   ```sh
+   gh api graphql -f query='
+   query($o:String!,$n:String!,$pr:Int!){repository(owner:$o,name:$n){
+     pullRequest(number:$pr){reviewThreads(first:100){nodes{
+       id isResolved path line
+       comments(first:1){nodes{databaseId author{login} body}}}}}}}' \
+     -F o=<owner> -F n=<repo> -F pr=<PR>
+   ```
+2. **Reply on the thread** (REST — posts as the authenticated human):
+   ```sh
+   gh api repos/<owner>/<repo>/pulls/<PR>/comments/<comment_databaseId>/replies \
+     -f body='Fixed in <sha>: <what changed>.'
+   ```
+3. **Resolve the thread** (GraphQL, using the thread `id` from step 1):
+   ```sh
+   gh api graphql \
+     -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' \
+     -F t=<threadId>
+   ```
+
+One reply per addressed thread, then resolve — no dangling threads at merge time.
 
 ## Build / toolchain
 
