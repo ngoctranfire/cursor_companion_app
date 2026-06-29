@@ -243,16 +243,20 @@ class AgentDetailViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isSending = true) }
             try {
+                // The run this follow-up supersedes — its persisted mode (if any) is what the new
+                // run inherits, since the request sends no mode and the server continues in the
+                // current one. Captured before the state swap below.
+                val priorNewest = _uiState.value.newestRun
                 val run = apiClient.createRun(agentId, CreateRunRequest(prompt = PromptBody(text))).run
                 // A stale in-flight load must not overwrite the just-created run.
                 loadJob?.cancel()
                 promptStore.save(run.id, text)
-                // A follow-up inherits the agent's current mode (the request sends none, so the
-                // server continues in that mode). Only carry it forward when we actually know it:
-                // for legacy or externally-created agents the mode is genuinely unknown, and
-                // stamping a guess (e.g. "agent") would poison the latest-mode signal and
-                // mis-gate CUR-8's Build action. Leave it null/unknown instead.
-                val inheritedMode = runModeStore.latestModeForAgent(agentId)
+                // Carry the mode forward ONLY when the prior newest run's mode is actually known.
+                // For legacy or externally-created runs the mode is genuinely unknown, and stamping
+                // a guess (e.g. "agent") would fabricate a mode row, poisoning the latest-mode
+                // signal CUR-8's Build action gates on. Persist nothing and leave latestMode null
+                // until a mode is genuinely observed.
+                val inheritedMode = priorNewest?.let { runModeStore.modeForRun(it.id) }
                 if (inheritedMode != null) {
                     runModeStore.recordMode(run.id, agentId, inheritedMode)
                 }
@@ -324,9 +328,13 @@ class AgentDetailViewModel(
                 }
                 val seed = runChanged || _uiState.value.timeline.isEmpty()
                 val seedPrompt = if (seed && newest != null) promptStore.get(newest.id) else null
-                // Mode is local-only (the API never returns it) — read the agent's latest so the
-                // UI / CUR-8's Build action can tell whether this agent is in plan mode.
-                val latestMode = runModeStore.latestModeForAgent(agentId)
+                // Mode is local-only (the API never returns it). Derive it from the NEWEST run's
+                // persisted mode — not the agent's last-recorded mode, which can be stale relative
+                // to the server's newest run (e.g. a plan-mode agent whose latest run was started
+                // elsewhere). A newest run with no recorded mode (legacy/external run, or one
+                // created before mode persistence) stays null, so CUR-8 hides "Build" rather than
+                // defaulting to "agent" and wrongly enabling it.
+                val latestMode = newest?.let { runModeStore.modeForRun(it.id) }
                 _uiState.update { state ->
                     state.copy(
                         isLoading = false,

@@ -119,6 +119,8 @@ dependencies {
     implementation(libs.metrox.viewmodel.compose)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)
+    // ViewModel unit tests: Dispatchers.setMain so viewModelScope runs on a test dispatcher.
+    testImplementation(libs.kotlinx.coroutines.test)
     // Screenshot testing (Roborazzi + Robolectric, JVM — no device/emulator).
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.roborazzi)

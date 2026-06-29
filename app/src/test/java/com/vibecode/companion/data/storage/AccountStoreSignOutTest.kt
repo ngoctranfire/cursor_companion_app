@@ -12,11 +12,13 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.io.IOException
 
 /**
  * Guards the sign-out data-loss/privacy path: [AccountStore.clearAccountData] must wipe **both**
@@ -74,5 +76,28 @@ class AccountStoreSignOutTest {
         assertEquals(0, db.preferenceProfileDao().allProfiles().size)
         // DataStore: cleared.
         assertNull(context.companionDataStore.data.first()[probeKey])
+    }
+
+    /**
+     * The wipe is all-or-nothing the *safe* way: Room is cleared first, so if it fails the
+     * DataStore (the previous account's API key + state) is left fully intact rather than
+     * half-wiped — and the failure surfaces as [IOException], the contract `signOut()` handles.
+     */
+    @Test
+    fun clearAccountData_whenRoomClearFails_leavesDataStoreIntact_andSurfacesIoException() = runBlocking {
+        // Seed the shared DataStore — this stands in for the previous account's key/state.
+        val probeKey = stringPreferencesKey("signout_probe")
+        context.companionDataStore.edit { it[probeKey] = "present" }
+        // Force the Room wipe to throw deterministically: drop a table that clearAllTables()'s
+        // generated `DELETE FROM run_modes` targets, so the wipe fails with "no such table".
+        // (Merely closing the db doesn't work — Room transparently reopens it.)
+        db.openHelper.writableDatabase.execSQL("DROP TABLE run_modes")
+
+        val error = runCatching { accountStore.clearAccountData() }.exceptionOrNull()
+
+        // Failure is mapped to IOException (so signOut()'s existing catch surfaces a snackbar)...
+        assertTrue("expected IOException but was $error", error is IOException)
+        // ...and because Room is wiped first, the DataStore was never touched.
+        assertEquals("present", context.companionDataStore.data.first()[probeKey])
     }
 }

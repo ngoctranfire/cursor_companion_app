@@ -137,7 +137,8 @@ class AgentListViewModel(
 
     /**
      * Wipes account-scoped data via [AccountStore] and invokes [onSignedOut] to navigate away.
-     * A DataStore IO failure is surfaced as a snackbar rather than stranding the user signed-in.
+     * A storage failure — DataStore IO or a Room wipe error, both surfaced as [IOException] — is
+     * shown as a snackbar and keeps the user signed in rather than stranding them half-signed-out.
      */
     fun signOut(onSignedOut: () -> Unit) {
         viewModelScope.launch {

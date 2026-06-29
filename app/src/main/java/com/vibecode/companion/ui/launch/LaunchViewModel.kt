@@ -17,11 +17,13 @@ import com.vibecode.companion.data.storage.PreferenceProfileStore
 import com.vibecode.companion.data.storage.PromptStore
 import com.vibecode.companion.data.storage.RepoCache
 import com.vibecode.companion.data.storage.RunModeStore
+import com.vibecode.companion.di.AppCoroutineScope
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metrox.viewmodel.ViewModelKey
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -68,6 +70,7 @@ class LaunchViewModel(
     private val promptStore: PromptStore,
     private val runModeStore: RunModeStore,
     private val preferenceProfileStore: PreferenceProfileStore,
+    @AppCoroutineScope private val appScope: CoroutineScope,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LaunchUiState())
@@ -80,7 +83,10 @@ class LaunchViewModel(
     init {
         viewModelScope.launch {
             // Restore the user's saved launch defaults first, so a returning user lands on their
-            // last repo / model / options. These are local prefs — the API can't supply them.
+            // last repo / model / options AND the model/repo validation below runs against the
+            // restored selection. Loading models concurrently (the old shape) let validation race
+            // ahead of the restore, see a still-null selection, and let a stale/unsupported id
+            // survive. These are local prefs — the API can't supply them.
             val defaults = preferenceProfileStore.launchDefaults()
             _uiState.update {
                 it.copy(
@@ -92,17 +98,26 @@ class LaunchViewModel(
             }
             val cached = repoCache.get()
             if (cached == null) {
-                // First open with no cache at all — fetch once automatically.
-                // A cached-but-empty list is respected (zero repos is a valid state;
-                // re-fetching every open would burn the 1/min rate limit).
+                // First open with no cache at all — fetch once automatically (refreshRepos drops a
+                // restored repo the fetched list doesn't offer). A cached-but-empty list is
+                // respected (zero repos is a valid state; re-fetching every open would burn the
+                // 1/min rate limit).
                 refreshRepos()
             } else {
                 _uiState.update {
-                    it.copy(repoUrls = cached.urls, repoFetchedAtEpochMs = cached.fetchedAtEpochMs)
+                    it.copy(
+                        repoUrls = cached.urls,
+                        repoFetchedAtEpochMs = cached.fetchedAtEpochMs,
+                        // Drop a restored repo the cached list no longer offers, so canLaunch can't
+                        // stay true for an inaccessible repo (the launch would fail server-side).
+                        selectedRepo = it.selectedRepo?.takeIf { url -> url in cached.urls },
+                    )
                 }
             }
+            // Load models only after the saved selection is restored, so loadModels() validates
+            // the restored model id against the freshly loaded list and drops it if unsupported.
+            loadModels()
         }
-        loadModels()
     }
 
     /**
@@ -118,7 +133,15 @@ class LaunchViewModel(
                 val now = System.currentTimeMillis()
                 repoCache.save(urls, now)
                 _uiState.update {
-                    it.copy(reposLoading = false, repoUrls = urls, repoFetchedAtEpochMs = now)
+                    it.copy(
+                        reposLoading = false,
+                        repoUrls = urls,
+                        repoFetchedAtEpochMs = now,
+                        // Drop a selected repo the fresh list no longer offers (mirrors the stale
+                        // model drop in loadModels) so canLaunch can't stay true for a repo the
+                        // user can no longer launch against.
+                        selectedRepo = it.selectedRepo?.takeIf { url -> url in urls },
+                    )
                 }
             } catch (ex: CursorApiException) {
                 val message = if (ex.isRateLimited || ex.code == "rate_limit_exceeded") {
@@ -199,7 +222,11 @@ class LaunchViewModel(
                 // on-device bookkeeping below succeeds — a failed local write must never strand
                 // the user on the launch screen.
                 _uiState.update { it.copy(launching = false, launchedAgentId = response.agent.id) }
-                persistLaunchResult(response, state, chosenMode, repo)
+                // Persist on the app scope, not viewModelScope: publishing launchedAgentId above
+                // pops the launch screen and clears this VM, cancelling viewModelScope and aborting
+                // these writes mid-flight. The app scope outlives the screen so the prompt / run
+                // mode / launch defaults are durably saved even on a fast navigation away.
+                appScope.launch { persistLaunchResult(response, state, chosenMode, repo) }
             } catch (ex: CursorApiException) {
                 val message = when (ex.code) {
                     "repository_access" ->

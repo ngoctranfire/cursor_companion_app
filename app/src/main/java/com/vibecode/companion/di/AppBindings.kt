@@ -14,6 +14,9 @@ import dev.zacsweers.metro.BindingContainer
 import dev.zacsweers.metro.ContributesTo
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 /**
  * Process-singleton bindings, aggregated into [AppGraph] by `@ContributesTo(AppScope::class)`.
@@ -26,6 +29,17 @@ import dev.zacsweers.metro.SingleIn
 @ContributesTo(AppScope::class)
 @BindingContainer
 object AppBindings {
+
+    /**
+     * Process-lifetime scope for fire-and-forget work that must outlive the UI component that
+     * started it (e.g. post-launch bookkeeping after the launch screen is popped). A
+     * [SupervisorJob] keeps one failed write from cancelling the others; never cancelled — it
+     * lives for the whole process, like every other [SingleIn] singleton here.
+     */
+    @Provides
+    @SingleIn(AppScope::class)
+    @AppCoroutineScope
+    fun appCoroutineScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** Encrypted store for the Cursor API key — single instance so writes are seen everywhere. */
     @Provides

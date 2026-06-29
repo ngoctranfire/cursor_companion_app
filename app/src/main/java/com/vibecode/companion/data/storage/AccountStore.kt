@@ -7,8 +7,10 @@ import com.vibecode.companion.di.AppContext
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 /**
  * Account-level operations over the shared local stores. Today that's just sign-out;
@@ -26,15 +28,30 @@ class AccountStore(
 
     /**
      * Sign-out: wipe everything account-scoped so the next account never sees the previous
-     * one's data. That means both backing stores — the shared DataStore (encrypted API key,
-     * repo cache, prompt history, poll-status baselines) is cleared wholesale, and the Room
-     * database (run-mode history, preference profiles) has all its tables emptied. The Room
+     * one's data. That means both backing stores — the Room database (run-mode history,
+     * preference profiles) has all its tables emptied, and the shared DataStore (encrypted API
+     * key, repo cache, prompt history, poll-status baselines) is cleared wholesale. The Room
      * schema and the Keystore-held AES key survive; only their *contents* go. The default
      * preference profile is re-seeded lazily on the next launch (see [PreferenceProfileStore]).
+     *
+     * Ordering matters: Room is cleared **first** so a failure leaves the previous account fully
+     * intact rather than half-wiped — if the DataStore (API key + state) were cleared first and
+     * then the Room call threw, the `run_modes` / `preference_profiles` rows would linger on disk
+     * for the next account to inherit, defeating the isolation this wipe exists to provide. Any
+     * Room failure is mapped to [IOException] so the sign-out caller's existing error handling
+     * surfaces it (snackbar, stay signed in) instead of crashing on an unhandled exception.
+     *
+     * @throws IOException if either backing store fails to clear.
      */
     suspend fun clearAccountData() {
-        context.companionDataStore.edit { it.clear() }
         // clearAllTables() runs its own transaction and must not be called on the main thread.
-        withContext(Dispatchers.IO) { database.clearAllTables() }
+        try {
+            withContext(Dispatchers.IO) { database.clearAllTables() }
+        } catch (e: CancellationException) {
+            throw e // never swallow cancellation — structured concurrency depends on it
+        } catch (e: Exception) {
+            throw IOException("Failed to clear the local database on sign-out", e)
+        }
+        context.companionDataStore.edit { it.clear() }
     }
 }

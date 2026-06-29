@@ -30,3 +30,14 @@ abstract class SessionScope private constructor()
 @Qualifier
 @Retention(AnnotationRetention.BINARY)
 annotation class AppContext
+
+/**
+ * Qualifies the process-lifetime [kotlinx.coroutines.CoroutineScope] (see `AppBindings`) used for
+ * fire-and-forget work that must outlive the UI component that started it — e.g. persisting a
+ * just-launched agent's bookkeeping after the launch screen is popped and its `viewModelScope`
+ * is cancelled. A reusable primitive for the persistence foundation; qualified so it can never be
+ * confused with a `viewModelScope` or any other ad-hoc scope.
+ */
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class AppCoroutineScope

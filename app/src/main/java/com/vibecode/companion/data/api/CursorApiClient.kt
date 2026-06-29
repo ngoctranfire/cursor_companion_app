@@ -23,8 +23,12 @@ import kotlin.coroutines.resumeWithException
  * The API is in beta — all calls go through this adapter so a future API change
  * stays contained here. Errors surface as [CursorApiException] with the
  * machine-readable `code` from the error envelope.
+ *
+ * `open` (along with the request methods used by ViewModels) so unit tests can subclass it with a
+ * canned-response fake — the project keeps no mocking framework and prefers hand-written fakes.
+ * Production always uses the real instance wired in `di/AppBindings`.
  */
-class CursorApiClient(
+open class CursorApiClient(
     private val apiKeyProvider: suspend () -> String?,
     baseUrl: String = DEFAULT_BASE_URL,
 ) {
@@ -65,10 +69,10 @@ class CursorApiClient(
 
     // ---- Catalog ----
 
-    suspend fun listModels(): ListModelsResponse = get("v1/models")
+    open suspend fun listModels(): ListModelsResponse = get("v1/models")
 
     /** Heavily rate limited (1/min/user) — callers must cache. See RepoCache. */
-    suspend fun listRepositories(): ListRepositoriesResponse = get("v1/repositories")
+    open suspend fun listRepositories(): ListRepositoriesResponse = get("v1/repositories")
 
     // ---- Agents ----
 
@@ -82,9 +86,9 @@ class CursorApiClient(
         addQueryParameter("includeArchived", includeArchived.toString())
     }
 
-    suspend fun getAgent(agentId: String): CloudAgent = get("v1/agents/$agentId")
+    open suspend fun getAgent(agentId: String): CloudAgent = get("v1/agents/$agentId")
 
-    suspend fun createAgent(request: CreateAgentRequest): CreateAgentResponse =
+    open suspend fun createAgent(request: CreateAgentRequest): CreateAgentResponse =
         post("v1/agents", json.encodeToString(CreateAgentRequest.serializer(), request))
 
     suspend fun archiveAgent(agentId: String): IdResponse =
@@ -97,17 +101,17 @@ class CursorApiClient(
 
     // ---- Runs ----
 
-    suspend fun listRuns(agentId: String, limit: Int = 20, cursor: String? = null): ListRunsResponse =
+    open suspend fun listRuns(agentId: String, limit: Int = 20, cursor: String? = null): ListRunsResponse =
         get("v1/agents/$agentId/runs") {
             addQueryParameter("limit", limit.toString())
             cursor?.let { addQueryParameter("cursor", it) }
         }
 
-    suspend fun getRun(agentId: String, runId: String): Run =
+    open suspend fun getRun(agentId: String, runId: String): Run =
         get("v1/agents/$agentId/runs/$runId")
 
     /** 409 with code `agent_busy` means a run is already active — surface as retry/queue UX. */
-    suspend fun createRun(agentId: String, request: CreateRunRequest): CreateRunResponse =
+    open suspend fun createRun(agentId: String, request: CreateRunRequest): CreateRunResponse =
         post("v1/agents/$agentId/runs", json.encodeToString(CreateRunRequest.serializer(), request))
 
     suspend fun cancelRun(agentId: String, runId: String): IdResponse =

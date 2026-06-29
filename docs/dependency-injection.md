@@ -28,8 +28,8 @@ Compile-time graph safety (Dagger-class, no reflection at runtime) + Kotlin-firs
 
 | Scope | Lifetime | Holds |
 |---|---|---|
-| `AppScope` (`@SingleIn(AppScope::class)`) | process | `ApiKeyStore`, `RepoCache`, `PromptStore`, `CompanionDatabase` + its `RunModeStore`/`PreferenceProfileStore`, `CursorApiClient`, `RunStreamClient` |
-| `AccountScope` | per signed-in account | account-bound data — the stores above (incl. the Room `CompanionDatabase`) move here when per-account lands. Today they're effectively account-scoped: `AccountStore.clearAccountData()` wipes the DataStore **and** `CompanionDatabase.clearAllTables()` on sign-out |
+| `AppScope` (`@SingleIn(AppScope::class)`) | process | `ApiKeyStore`, `RepoCache`, `PromptStore`, `CompanionDatabase` + its `RunModeStore`/`PreferenceProfileStore`, `CursorApiClient`, `RunStreamClient`, and the `@AppCoroutineScope` `CoroutineScope` for fire-and-forget work that must outlive a ViewModel |
+| `AccountScope` | per signed-in account | account-bound data — the stores above (incl. the Room `CompanionDatabase`) move here when per-account scoping lands. Until then they live in `AppScope` but are wiped per-account at sign-out: `AccountStore.clearAccountData()` clears `CompanionDatabase.clearAllTables()` **first**, then the DataStore, so a failed wipe leaves the previous account intact rather than half-cleared |
 | `SessionScope` | per agent run / session | the runtime `agentId` + session-lifetime state |
 
 Define the future scopes (and stub their `@GraphExtension` factories) **now**, even unused, so the shape is locked in. **Metro does not own lifecycle cleanup** — teardown means dropping the extension reference and closing/cancelling any resources you provided.
