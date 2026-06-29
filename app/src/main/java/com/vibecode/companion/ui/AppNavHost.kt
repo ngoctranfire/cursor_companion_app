@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -32,16 +32,18 @@ object Routes {
 }
 
 /**
- * @param initialAgentId deep-link target from a status notification
- *   (MainActivity reads the "agentId" intent extra).
+ * @param deepLinkAgentId target from a status notification
+ *   (MainActivity reads the AgentNotifications agent id intent extra).
+ * @param deepLinkEventId monotonic activity-local id that lets warm-start notification taps
+ *   navigate even when they target the same agent as a previous tap.
  */
 @Composable
-fun AppNavHost(initialAgentId: String? = null) {
+fun AppNavHost(deepLinkAgentId: String? = null, deepLinkEventId: Long = 0L) {
     val context = LocalContext.current
     val graph = (context.applicationContext as CompanionApp).graph
     val navController = rememberNavController()
-    // Survives recreation so a notification deep link only navigates once.
-    var deepLinkConsumed by rememberSaveable { mutableStateOf(false) }
+    // Survives recreation so a notification deep link only navigates once per delivered intent.
+    var consumedDeepLinkEventId by rememberSaveable { mutableLongStateOf(0L) }
 
     // Gate on the (async) DataStore read so we pick the right start destination once.
     val hasKey by produceState<Boolean?>(initialValue = null) {
@@ -95,10 +97,14 @@ fun AppNavHost(initialAgentId: String? = null) {
                 }
             }
 
-            LaunchedEffect(initialAgentId, hasKey) {
-                if (hasKey == true && !initialAgentId.isNullOrBlank() && !deepLinkConsumed) {
-                    deepLinkConsumed = true
-                    navController.navigate(Routes.agentDetail(initialAgentId)) {
+            LaunchedEffect(deepLinkAgentId, deepLinkEventId, hasKey) {
+                if (
+                    hasKey == true &&
+                    !deepLinkAgentId.isNullOrBlank() &&
+                    deepLinkEventId != consumedDeepLinkEventId
+                ) {
+                    consumedDeepLinkEventId = deepLinkEventId
+                    navController.navigate(Routes.agentDetail(deepLinkAgentId)) {
                         launchSingleTop = true
                     }
                 }
