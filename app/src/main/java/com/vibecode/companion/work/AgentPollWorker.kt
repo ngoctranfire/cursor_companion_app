@@ -6,11 +6,13 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.vibecode.companion.data.api.AgentMode
 import com.vibecode.companion.data.api.CursorApiClient
 import com.vibecode.companion.data.api.CursorApiException
 import com.vibecode.companion.data.api.Run
 import com.vibecode.companion.data.api.RunStatus
 import com.vibecode.companion.data.storage.ApiKeyStore
+import com.vibecode.companion.data.storage.RunModeStore
 import com.vibecode.companion.data.storage.companionDataStore
 import com.vibecode.companion.notifications.AgentNotifications
 import dev.zacsweers.metro.Assisted
@@ -38,6 +40,7 @@ class AgentPollWorker(
     @Assisted params: WorkerParameters,
     private val apiKeyStore: ApiKeyStore,
     private val apiClient: CursorApiClient,
+    private val runModeStore: RunModeStore,
 ) : CoroutineWorker(context, params) {
 
     /**
@@ -96,27 +99,33 @@ class AgentPollWorker(
                 }
                 current[run.id] = run.status
 
-                val prior = previous[run.id]
-                val isTerminalNow =
-                    run.status == RunStatus.FINISHED || run.status == RunStatus.ERROR
-                val justReachedTerminal = prior != null &&
-                    !RunStatus.isTerminal(prior) &&
-                    isTerminalNow
-                // A run that started AND finished within one poll interval has
-                // no prior status — notify if it was updated after the last
-                // completed poll. No baseline yet (first poll after install)
-                // suppresses, so historical runs don't spam.
-                val finishedSinceLastPoll = prior == null && isTerminalNow &&
-                    lastPollCompletedAt != null &&
-                    updatedAfter(run.updatedAt, lastPollCompletedAt)
-                if (justReachedTerminal || finishedSinceLastPoll) {
-                    AgentNotifications.notifyRunTerminal(
-                        context = applicationContext,
-                        agentId = agent.id,
-                        agentName = agent.name,
-                        status = run.status,
-                        prUrl = run.git?.branches?.firstNotNullOfOrNull { it.prUrl },
+                val mode = modeForRun(run.id)
+                when (
+                    terminalNotificationType(
+                        priorStatus = previous[run.id],
+                        currentStatus = run.status,
+                        updatedAt = run.updatedAt,
+                        lastPollCompletedAt = lastPollCompletedAt,
+                        persistedMode = mode,
                     )
+                ) {
+                    TerminalNotificationType.NONE -> Unit
+                    TerminalNotificationType.RUN_TERMINAL -> {
+                        AgentNotifications.notifyRunTerminal(
+                            context = applicationContext,
+                            agentId = agent.id,
+                            agentName = agent.name,
+                            status = run.status,
+                            prUrl = run.git?.branches?.firstNotNullOfOrNull { it.prUrl },
+                        )
+                    }
+                    TerminalNotificationType.PLAN_READY -> {
+                        AgentNotifications.notifyPlanReady(
+                            context = applicationContext,
+                            agentId = agent.id,
+                            agentName = agent.name,
+                        )
+                    }
                 }
             }
 
@@ -146,11 +155,14 @@ class AgentPollWorker(
     private suspend fun readLastPollCompletedAt(): Long? =
         applicationContext.companionDataStore.data.first()[PREF_LAST_POLL_COMPLETED_AT]
 
-    private fun updatedAfter(updatedAt: String, epochMillis: Long): Boolean = try {
-        Instant.parse(updatedAt).toEpochMilli() > epochMillis
-    } catch (_: Exception) {
-        false
-    }
+    private suspend fun modeForRun(runId: String): String? =
+        try {
+            runModeStore.modeForRun(runId)
+        } catch (ex: CancellationException) {
+            throw ex
+        } catch (_: Exception) {
+            null
+        }
 
     private suspend fun writePollState(statuses: Map<String, String>) {
         val encoded = json.encodeToString(STATUS_MAP_SERIALIZER, statuses)
@@ -159,4 +171,41 @@ class AgentPollWorker(
             it[PREF_LAST_POLL_COMPLETED_AT] = System.currentTimeMillis()
         }
     }
+}
+
+internal enum class TerminalNotificationType {
+    NONE,
+    RUN_TERMINAL,
+    PLAN_READY,
+}
+
+internal fun terminalNotificationType(
+    priorStatus: String?,
+    currentStatus: String,
+    updatedAt: String,
+    lastPollCompletedAt: Long?,
+    persistedMode: String?,
+): TerminalNotificationType {
+    val isTerminalNow = currentStatus == RunStatus.FINISHED || currentStatus == RunStatus.ERROR
+    val justReachedTerminal = priorStatus != null &&
+        !RunStatus.isTerminal(priorStatus) &&
+        isTerminalNow
+    // A run that started AND finished within one poll interval has no prior status — notify if it
+    // was updated after the last completed poll. No baseline yet suppresses historical runs.
+    val finishedSinceLastPoll = priorStatus == null && isTerminalNow &&
+        lastPollCompletedAt != null &&
+        updatedAfter(updatedAt, lastPollCompletedAt)
+
+    if (!justReachedTerminal && !finishedSinceLastPoll) return TerminalNotificationType.NONE
+    return if (persistedMode == AgentMode.PLAN) {
+        TerminalNotificationType.PLAN_READY
+    } else {
+        TerminalNotificationType.RUN_TERMINAL
+    }
+}
+
+private fun updatedAfter(updatedAt: String, epochMillis: Long): Boolean = try {
+    Instant.parse(updatedAt).toEpochMilli() > epochMillis
+} catch (_: Exception) {
+    false
 }
