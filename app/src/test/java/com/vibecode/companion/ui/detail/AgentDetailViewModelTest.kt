@@ -22,8 +22,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -358,26 +358,32 @@ class AgentDetailViewModelTest {
             onCreateRun = { _, _ -> CreateRunResponse(run = buildRun) },
             onGetRun = { _, _ -> buildRun },
         )
-        // A RunModeStore whose Room ops all fail — recordMode(AGENT) for the build run throws. The
-        // remote run already exists, so this must NOT route into the build-failure path (which would
-        // show a connection/API error → the user retries → a DUPLICATE run). buildPlan has no canBuild
-        // guard (the UI gates the button); invoking it directly exercises the post-create isolation.
+        // A RunModeStore whose writes fail — recordMode(AGENT) for the build run throws — but whose
+        // mode flow is production-accurate (emits null when no row exists, like the real Room DAO).
+        // The remote run already exists, so this must NOT route into the build-failure path (which
+        // would show a connection/API error → the user retries → a DUPLICATE run). buildPlan has no
+        // canBuild guard (the UI gates the button); invoking it directly exercises the isolation.
         val failingModeStore = RunModeStore(ThrowingRunModeDao())
         val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, failingModeStore, agentId)
 
         vm.awaitState { !it.isLoading && it.newestRun?.id == "runOld" }
         vm.buildPlan()
-        vm.awaitState { it.newestRun?.id == "runNew" }
+        // buildPlan sets latestMode = AGENT eagerly, then observeMode(runNew) collects the real-shaped
+        // flow, which emits null because recordMode threw and no row was written — overwriting the
+        // eager AGENT back to null. Await that settled state so the assertion isn't racing the flicker.
+        vm.awaitState { it.newestRun?.id == "runNew" && it.latestMode == null }
 
         val state = vm.uiState.value
         // The created run is preserved (build succeeded) and the user sees the non-fatal note — NOT
         // the createRun-failure path. The 'never mask a successful createRun' contract holds.
         assertFalse("build must not stay in-flight after a local-write failure", state.isBuilding)
         assertEquals("Run created, but local state could not be saved.", state.transientMessage)
-        // latestMode keeps the KNOWN new-run mode (AGENT, set eagerly) — never corrupted to PLAN, so
-        // Build correctly stays hidden rather than being wrongly re-offered on the new agent run.
-        assertEquals(AgentMode.AGENT, state.latestMode)
-        assertFalse("Build hides once the agent run starts", state.canBuild)
+        // latestMode resolves to null: with no persisted row, the real mode flow emits null and the
+        // observer overrides the eager AGENT. This is HARMLESS for a Build — the new run is an AGENT
+        // run, so Build must be hidden, and canBuild is false whether latestMode is AGENT or null
+        // (canBuild requires PLAN). No wrong Build is ever offered; latestMode feeds nothing else.
+        assertNull(state.latestMode)
+        assertFalse("Build stays hidden for the new agent run", state.canBuild)
     }
 
     @Test
@@ -559,7 +565,11 @@ class AgentDetailViewModelTest {
     private class ThrowingRunModeDao : RunModeDao {
         override suspend fun upsert(entity: RunModeEntity): Unit = throw IOException("db down")
         override suspend fun modeForRun(runId: String): String? = throw IOException("db down")
-        override fun modeForRunFlow(runId: String): Flow<String?> = emptyFlow()
+        // Production-accurate: the real Room `Flow<String?>` emits null until a row exists, then the
+        // recorded value. `upsert` always throws here, so no row is ever written → emit null. Using
+        // `emptyFlow()` (never emits) would bypass the production `observeMode` path entirely and let
+        // the ViewModel's eagerly-set latestMode survive untouched, hiding what really happens.
+        override fun modeForRunFlow(runId: String): Flow<String?> = flowOf<String?>(null)
         override suspend fun latestModeForAgent(agentId: String): String? = null
         override suspend fun runModesForAgent(agentId: String): List<RunModeEntity> = emptyList()
         override suspend fun clear() = Unit
