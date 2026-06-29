@@ -3,8 +3,10 @@ package com.vibecode.companion.ui.detail
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.room.Room
+import com.vibecode.companion.data.api.AgentMode
 import com.vibecode.companion.data.api.CloudAgent
 import com.vibecode.companion.data.api.CreateRunResponse
+import com.vibecode.companion.data.api.CursorApiException
 import com.vibecode.companion.data.api.ListRunsResponse
 import com.vibecode.companion.data.api.Run
 import com.vibecode.companion.data.api.RunStatus
@@ -16,11 +18,12 @@ import com.vibecode.companion.data.storage.db.RunModeDao
 import com.vibecode.companion.data.storage.db.RunModeEntity
 import com.vibecode.companion.testutil.FakeCursorApiClient
 import com.vibecode.companion.testutil.FakeRunStreamClient
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -224,6 +227,335 @@ class AgentDetailViewModelTest {
         )
     }
 
+    // ---- CUR-8: Build (plan → agent follow-up) ----
+
+    @Test
+    fun buildPlan_postsAgentModeAndCannedPrompt_persistsNewRunModeAsAgent() = runBlocking {
+        val agentId = "agentBuild"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val buildRun = run(id = "runNew", agentId = agentId)
+        var capturedMode: String? = "unset"
+        var capturedPrompt: String? = null
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, request ->
+                capturedMode = request.mode
+                capturedPrompt = request.prompt.text
+                CreateRunResponse(run = buildRun)
+            },
+            onGetRun = { _, _ -> buildRun },
+        )
+        // The newest run is a finished PLAN run → Build is offered.
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+        vm.awaitState { !it.isLoading && it.latestMode == AgentMode.PLAN && it.canBuild }
+
+        vm.buildPlan()
+        vm.awaitState { it.newestRun?.id == "runNew" }
+
+        // The build run was created in AGENT mode with the canned, non-empty prompt.
+        assertEquals(AgentMode.AGENT, capturedMode)
+        assertEquals("Implement the approved plan above.", capturedPrompt)
+        // The new run's mode is persisted as AGENT (a known value, not a guess), so latestMode flips
+        // to "agent" and Build hides afterward.
+        vm.awaitState { it.latestMode == AgentMode.AGENT }
+        assertEquals(AgentMode.AGENT, db.runModeDao().modeForRun("runNew"))
+        assertFalse("Build must hide once the agent run starts", vm.uiState.value.canBuild)
+        assertFalse(vm.uiState.value.isBuilding)
+    }
+
+    @Test
+    fun buildPlan_whenAgentBusy_surfacesMessage_preservesPlanRun_andKeepsBuildAvailable() = runBlocking {
+        val agentId = "agentBusy"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, _ -> throw CursorApiException(409, "agent_busy", "busy") },
+            onGetRun = { _, _ -> planRun },
+        )
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+        vm.awaitState { !it.isLoading && it.canBuild }
+
+        vm.buildPlan()
+        vm.awaitState { it.transientMessage != null }
+
+        val state = vm.uiState.value
+        assertFalse(state.isBuilding)
+        assertEquals("Agent is busy — wait for the current run to finish.", state.transientMessage)
+        // The plan run is untouched and Build stays available to retry.
+        assertEquals("runOld", state.newestRun?.id)
+        assertEquals(AgentMode.PLAN, state.latestMode)
+        assertTrue(state.canBuild)
+    }
+
+    @Test
+    fun buildPlan_whenNetworkFails_surfacesConnectionMessage_andPreservesPlanRun() = runBlocking {
+        val agentId = "agentNet"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, _ -> throw IOException("offline") },
+            onGetRun = { _, _ -> planRun },
+        )
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+        vm.awaitState { !it.isLoading && it.canBuild }
+
+        vm.buildPlan()
+        vm.awaitState { it.transientMessage != null }
+
+        val state = vm.uiState.value
+        assertFalse(state.isBuilding)
+        assertEquals("Check your connection", state.transientMessage)
+        assertEquals("runOld", state.newestRun?.id)
+        assertTrue("no run created → Build stays available", state.canBuild)
+        // A failed create must not fabricate a mode row for a run that never existed.
+        assertTrue(db.runModeDao().runModesForAgent(agentId).none { it.runId != "runOld" })
+    }
+
+    @Test
+    fun buildPlan_whenRateLimited_surfacesMessage_preservesPlanRun_andKeepsBuildAvailable() = runBlocking {
+        val agentId = "agentLimited"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, _ -> throw CursorApiException(429, "rate_limit_exceeded", "slow down") },
+            onGetRun = { _, _ -> planRun },
+        )
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+        vm.awaitState { !it.isLoading && it.canBuild }
+
+        vm.buildPlan()
+        vm.awaitState { it.transientMessage != null }
+
+        val state = vm.uiState.value
+        assertFalse(state.isBuilding)
+        // Production (buildPlan's CursorApiException handler) maps rate_limit_exceeded to this
+        // transient/retry message — asserted verbatim from the source, not invented here.
+        assertEquals("Rate limited — try again in a moment.", state.transientMessage)
+        // The plan run is untouched and Build stays available to retry once the limit clears.
+        assertEquals("runOld", state.newestRun?.id)
+        assertEquals(AgentMode.PLAN, state.latestMode)
+        assertTrue(state.canBuild)
+        // A failed create must not fabricate a mode row for a run that never existed.
+        assertTrue(db.runModeDao().runModesForAgent(agentId).none { it.runId != "runOld" })
+    }
+
+    @Test
+    fun buildPlan_whenLocalWriteFails_preservesCreatedRun_andSurfacesNonFatalMessage() = runBlocking {
+        val agentId = "agentBuildW"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val buildRun = run(id = "runNew", agentId = agentId)
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, _ -> CreateRunResponse(run = buildRun) },
+            onGetRun = { _, _ -> buildRun },
+        )
+        // A RunModeStore whose writes fail — recordMode(AGENT) for the build run throws — but whose
+        // mode flow is production-accurate (emits null when no row exists, like the real Room DAO).
+        // The remote run already exists, so this must NOT route into the build-failure path (which
+        // would show a connection/API error → the user retries → a DUPLICATE run). buildPlan has no
+        // canBuild guard (the UI gates the button); invoking it directly exercises the isolation.
+        val failingModeStore = RunModeStore(ThrowingRunModeDao())
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, failingModeStore, agentId)
+
+        vm.awaitState { !it.isLoading && it.newestRun?.id == "runOld" }
+        vm.buildPlan()
+        // buildPlan sets latestMode = AGENT eagerly, then observeMode(runNew) collects the real-shaped
+        // flow, which emits null because recordMode threw and no row was written — overwriting the
+        // eager AGENT back to null. Await that settled state so the assertion isn't racing the flicker.
+        vm.awaitState { it.newestRun?.id == "runNew" && it.latestMode == null }
+
+        val state = vm.uiState.value
+        // The created run is preserved (build succeeded) and the user sees the non-fatal note — NOT
+        // the createRun-failure path. The 'never mask a successful createRun' contract holds.
+        assertFalse("build must not stay in-flight after a local-write failure", state.isBuilding)
+        assertEquals("Run created, but local state could not be saved.", state.transientMessage)
+        // latestMode resolves to null: with no persisted row, the real mode flow emits null and the
+        // observer overrides the eager AGENT. This is HARMLESS for a Build — the new run is an AGENT
+        // run, so Build must be hidden, and canBuild is false whether latestMode is AGENT or null
+        // (canBuild requires PLAN). No wrong Build is ever offered; latestMode feeds nothing else.
+        assertNull(state.latestMode)
+        assertFalse("Build stays hidden for the new agent run", state.canBuild)
+    }
+
+    @Test
+    fun buildPlan_whenPromptSaveFails_stillRecordsAgentMode_soBuildStaysHidden() = runBlocking {
+        val agentId = "agentBuildP"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val buildRun = run(id = "runNew", agentId = agentId)
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, _ -> CreateRunResponse(run = buildRun) },
+            onGetRun = { _, _ -> buildRun },
+        )
+        // Newest run is a finished PLAN run → Build is offered.
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        // The prompt save fails — this must NOT skip the AGENT mode write (the two are isolated, mode
+        // first). With no mode row, observeMode(runNew) would re-emit null and drop the known mode.
+        val failingPromptStore = ThrowingSavePromptStore(context)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), failingPromptStore, runModeStore, agentId)
+
+        vm.awaitState { !it.isLoading && it.latestMode == AgentMode.PLAN && it.canBuild }
+        vm.buildPlan()
+        vm.awaitState { it.newestRun?.id == "runNew" }
+
+        // The build run's KNOWN mode (AGENT) was still recorded despite the prompt-save failure: Room
+        // has the row and latestMode reflects it, so Build correctly STAYS hidden afterward.
+        vm.awaitState { it.latestMode == AgentMode.AGENT }
+        assertEquals(AgentMode.AGENT, vm.uiState.value.latestMode)
+        assertEquals(AgentMode.AGENT, db.runModeDao().modeForRun("runNew"))
+        assertFalse("Build must hide once the agent run starts", vm.uiState.value.canBuild)
+        // The build still succeeded and surfaced the non-fatal note rather than a duplicate-retry error.
+        assertFalse(vm.uiState.value.isBuilding)
+        assertEquals(
+            "Run created, but local state could not be saved.",
+            vm.uiState.value.transientMessage,
+        )
+    }
+
+    @Test
+    fun whileBuildInFlight_sendFollowUpIsNoOp_onlyOneCreateRun() = runBlocking {
+        val agentId = "agentMx1"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val buildRun = run(id = "runNew", agentId = agentId)
+        // Hold the first createRun in flight so the second path's guard is exercised deterministically.
+        val gate = CompletableDeferred<Unit>()
+        var createRunCalls = 0
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, _ ->
+                createRunCalls++
+                gate.await()
+                CreateRunResponse(run = buildRun)
+            },
+            onGetRun = { _, _ -> buildRun },
+        )
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+        vm.awaitState { !it.isLoading && it.canBuild }
+
+        // Start a Build; its createRun suspends on the gate, so isBuilding stays true.
+        vm.buildPlan()
+        vm.awaitState { it.isBuilding }
+
+        // A typed follow-up while building must be a NO-OP — the reciprocal guard blocks a 2nd createRun.
+        vm.onFollowUpTextChange("squeeze in a follow-up")
+        vm.sendFollowUp()
+        assertEquals("sendFollowUp must not create a run while building", 1, createRunCalls)
+        assertFalse("sendFollowUp must stay inert while building", vm.uiState.value.isSending)
+
+        // Release the build; it completes as the sole created run.
+        gate.complete(Unit)
+        vm.awaitState { it.newestRun?.id == "runNew" }
+        assertEquals("exactly one createRun overall", 1, createRunCalls)
+    }
+
+    @Test
+    fun whileFollowUpInFlight_buildPlanIsNoOp_onlyOneCreateRun() = runBlocking {
+        val agentId = "agentMx2"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val followUpRun = run(id = "runNew", agentId = agentId)
+        val gate = CompletableDeferred<Unit>()
+        var createRunCalls = 0
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, _ ->
+                createRunCalls++
+                gate.await()
+                CreateRunResponse(run = followUpRun)
+            },
+            onGetRun = { _, _ -> followUpRun },
+        )
+        // Newest run is a terminal PLAN run (so buildPlan would otherwise be actionable).
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+        vm.awaitState { !it.isLoading && it.canBuild }
+
+        // Start a follow-up; its createRun suspends on the gate, so isSending stays true.
+        vm.onFollowUpTextChange("keep going")
+        vm.sendFollowUp()
+        vm.awaitState { it.isSending }
+
+        // A Build tap while the follow-up is in flight must be a NO-OP — no 2nd createRun.
+        vm.buildPlan()
+        assertEquals("buildPlan must not create a run while a follow-up is in flight", 1, createRunCalls)
+        assertFalse("buildPlan must stay inert while sending", vm.uiState.value.isBuilding)
+
+        gate.complete(Unit)
+        vm.awaitState { it.newestRun?.id == "runNew" }
+        assertEquals("exactly one createRun overall", 1, createRunCalls)
+    }
+
+    @Test
+    fun canBuild_truthTable() {
+        val terminalRun = Run(
+            id = "r", agentId = "a", status = RunStatus.FINISHED, createdAt = "t", updatedAt = "t",
+        )
+        val activeRun = terminalRun.copy(status = RunStatus.RUNNING)
+
+        // plan + terminal → Build offered.
+        assertTrue(
+            AgentDetailUiState(
+                newestRun = terminalRun,
+                liveRunStatus = RunStatus.FINISHED,
+                latestMode = AgentMode.PLAN,
+            ).canBuild,
+        )
+        // plan + active → hidden (run still running).
+        assertFalse(
+            AgentDetailUiState(
+                newestRun = activeRun,
+                liveRunStatus = RunStatus.RUNNING,
+                latestMode = AgentMode.PLAN,
+            ).canBuild,
+        )
+        // agent + terminal → hidden (never after a normal agent run).
+        assertFalse(
+            AgentDetailUiState(
+                newestRun = terminalRun,
+                liveRunStatus = RunStatus.FINISHED,
+                latestMode = AgentMode.AGENT,
+            ).canBuild,
+        )
+        // unknown mode + terminal → hidden (never on a guessed/unknown mode).
+        assertFalse(
+            AgentDetailUiState(
+                newestRun = terminalRun,
+                liveRunStatus = RunStatus.FINISHED,
+                latestMode = null,
+            ).canBuild,
+        )
+        // plan + terminal but still streaming → hidden until the live stream settles.
+        assertFalse(
+            AgentDetailUiState(
+                newestRun = terminalRun,
+                liveRunStatus = RunStatus.FINISHED,
+                latestMode = AgentMode.PLAN,
+                isStreaming = true,
+            ).canBuild,
+        )
+        // plan + terminal but still replaying history → hidden until the replay settles.
+        assertFalse(
+            AgentDetailUiState(
+                newestRun = terminalRun,
+                liveRunStatus = RunStatus.FINISHED,
+                latestMode = AgentMode.PLAN,
+                isReplaying = true,
+            ).canBuild,
+        )
+    }
+
     /** A [PromptStore] whose `save` always fails, to exercise the prompt-save vs mode-write isolation. */
     private class ThrowingSavePromptStore(context: Context) : PromptStore(context) {
         override suspend fun save(runId: String, prompt: String): Unit = throw IOException("prompt store down")
@@ -233,7 +565,11 @@ class AgentDetailViewModelTest {
     private class ThrowingRunModeDao : RunModeDao {
         override suspend fun upsert(entity: RunModeEntity): Unit = throw IOException("db down")
         override suspend fun modeForRun(runId: String): String? = throw IOException("db down")
-        override fun modeForRunFlow(runId: String): Flow<String?> = emptyFlow()
+        // Production-accurate: the real Room `Flow<String?>` emits null until a row exists, then the
+        // recorded value. `upsert` always throws here, so no row is ever written → emit null. Using
+        // `emptyFlow()` (never emits) would bypass the production `observeMode` path entirely and let
+        // the ViewModel's eagerly-set latestMode survive untouched, hiding what really happens.
+        override fun modeForRunFlow(runId: String): Flow<String?> = flowOf<String?>(null)
         override suspend fun latestModeForAgent(agentId: String): String? = null
         override suspend fun runModesForAgent(agentId: String): List<RunModeEntity> = emptyList()
         override suspend fun clear() = Unit
