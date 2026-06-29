@@ -84,6 +84,8 @@ data class AgentDetailUiState(
     val followUpText: String = "",
     val isSending: Boolean = false,
     val isCancelling: Boolean = false,
+    /** True while [AgentDetailViewModel.buildPlan] is creating the follow-up build run. */
+    val isBuilding: Boolean = false,
     /**
      * The agent's latest recorded launch mode (`plan` / `agent`, see [AgentMode]), or `null`
      * when unknown — e.g. the agent was launched outside this app or before mode was persisted.
@@ -95,6 +97,22 @@ data class AgentDetailUiState(
 ) {
     val isRunActive: Boolean
         get() = newestRun != null && !RunStatus.isTerminal(liveRunStatus)
+
+    /**
+     * Whether the contextual "Build" action is offered — the bridge from a finished plan to an
+     * agent run that implements it. True ONLY when the newest run was launched in PLAN mode
+     * ([latestMode] == [AgentMode.PLAN], a value this app sets only when it genuinely knows the
+     * mode) AND that run is terminal with no live stream/replay in flight. A null/unknown mode or
+     * an active run hides Build: it never appears after a normal agent run, and never on a guessed
+     * mode (CUR-9's "never fabricate mode" contract). Deliberately independent of [isBuilding] — the
+     * action stays visible but disabled while the build run is being created (see the UI).
+     */
+    val canBuild: Boolean
+        get() = latestMode == AgentMode.PLAN &&
+            newestRun != null &&
+            RunStatus.isTerminal(liveRunStatus) &&
+            !isStreaming &&
+            !isReplaying
 }
 
 /**
@@ -129,6 +147,13 @@ class AgentDetailViewModel(
         const val MAX_RECONNECT_ATTEMPTS = 5
         const val INITIAL_BACKOFF_MS = 1_000L
         const val MAX_BACKOFF_MS = 30_000L
+
+        /**
+         * Canned prompt for the "Build" follow-up. The plan is already in the agent's context, so
+         * this just tells it to execute. Must be non-empty — the API rejects an empty prompt
+         * (minLength 1).
+         */
+        const val BUILD_PROMPT = "Implement the approved plan above."
     }
 
     private val _uiState = MutableStateFlow(AgentDetailUiState())
@@ -325,6 +350,74 @@ class AgentDetailViewModel(
                 _uiState.update { it.copy(isSending = false, transientMessage = message) }
             } catch (ex: IOException) {
                 _uiState.update { it.copy(isSending = false, transientMessage = "Check your connection") }
+            }
+        }
+    }
+
+    /**
+     * "Build": kicks off a follow-up run in AGENT mode to implement the plan the current (plan-mode)
+     * run produced — the headline bridge from planning to building. Mirrors [sendFollowUp]'s create →
+     * isolate-local-writes → optimistic-newest-run → stream flow, with three differences: it sends a
+     * canned prompt and an *explicit* [AgentMode.AGENT] (so the new run builds rather than re-plans),
+     * and it persists the new run's mode as AGENT — a value we *know* (we just sent it), not a guess —
+     * so [canBuild] flips false afterward and Build hides. The local writes are isolated exactly like
+     * the follow-up path: once the remote run exists a persistence failure surfaces a non-fatal note
+     * instead of failing the build (which would invite a duplicate retry). CancellationException is
+     * never caught here, so structured concurrency (e.g. the screen closing) still unwinds.
+     */
+    fun buildPlan() {
+        if (_uiState.value.isBuilding) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBuilding = true) }
+            try {
+                val run = apiClient.createRun(
+                    agentId,
+                    CreateRunRequest(prompt = PromptBody(BUILD_PROMPT), mode = AgentMode.AGENT),
+                ).run
+                // A stale in-flight load must not overwrite the just-created run.
+                loadJob?.cancel()
+                // The remote run exists now. From here a *local* persistence failure must NOT fail the
+                // build (which would show an error → the user retries → a DUPLICATE run). Keep the run,
+                // record the new run's KNOWN mode (AGENT — just sent), and surface a non-fatal note.
+                // The two writes are isolated so neither failure skips the other.
+                var anyFailed = false
+                if (!runLocalWrite(run.id) { runModeStore.recordMode(run.id, agentId, AgentMode.AGENT) }) {
+                    anyFailed = true
+                }
+                if (!runLocalWrite(run.id) { promptStore.save(run.id, BUILD_PROMPT) }) {
+                    anyFailed = true
+                }
+                lastEventId = null
+                lastTextKind = null
+                _uiState.update { state ->
+                    state.copy(
+                        isBuilding = false,
+                        pastRuns = listOfNotNull(state.newestRun) + state.pastRuns,
+                        newestRun = run,
+                        liveRunStatus = run.status,
+                        latestMode = AgentMode.AGENT,
+                        timeline = listOf(TimelineItem.UserPrompt(BUILD_PROMPT)),
+                        showReconnect = false,
+                        transientMessage = if (anyFailed) {
+                            "Run created, but local state could not be saved."
+                        } else {
+                            state.transientMessage
+                        },
+                    )
+                }
+                // Re-key the mode observer to the new run (set eagerly above for no flicker; observed
+                // so the persisted AGENT mode keeps latestMode current and Build stays hidden).
+                observeMode(run.id)
+                startStreaming(run.id)
+            } catch (ex: CursorApiException) {
+                val message = when (ex.code) {
+                    "agent_busy" -> "Agent is busy — wait for the current run to finish."
+                    "rate_limit_exceeded" -> "Rate limited — try again in a moment."
+                    else -> ex.message
+                }
+                _uiState.update { it.copy(isBuilding = false, transientMessage = message) }
+            } catch (ex: IOException) {
+                _uiState.update { it.copy(isBuilding = false, transientMessage = "Check your connection") }
             }
         }
     }

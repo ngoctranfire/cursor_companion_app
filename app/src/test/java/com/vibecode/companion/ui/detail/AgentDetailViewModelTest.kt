@@ -3,8 +3,10 @@ package com.vibecode.companion.ui.detail
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.room.Room
+import com.vibecode.companion.data.api.AgentMode
 import com.vibecode.companion.data.api.CloudAgent
 import com.vibecode.companion.data.api.CreateRunResponse
+import com.vibecode.companion.data.api.CursorApiException
 import com.vibecode.companion.data.api.ListRunsResponse
 import com.vibecode.companion.data.api.Run
 import com.vibecode.companion.data.api.RunStatus
@@ -221,6 +223,146 @@ class AgentDetailViewModelTest {
         assertEquals(
             "Run created, but local state could not be saved.",
             vm.uiState.value.transientMessage,
+        )
+    }
+
+    // ---- CUR-8: Build (plan → agent follow-up) ----
+
+    @Test
+    fun buildPlan_postsAgentModeAndCannedPrompt_persistsNewRunModeAsAgent() = runBlocking {
+        val agentId = "agentBuild"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val buildRun = run(id = "runNew", agentId = agentId)
+        var capturedMode: String? = "unset"
+        var capturedPrompt: String? = null
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, request ->
+                capturedMode = request.mode
+                capturedPrompt = request.prompt.text
+                CreateRunResponse(run = buildRun)
+            },
+            onGetRun = { _, _ -> buildRun },
+        )
+        // The newest run is a finished PLAN run → Build is offered.
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+        vm.awaitState { !it.isLoading && it.latestMode == AgentMode.PLAN && it.canBuild }
+
+        vm.buildPlan()
+        vm.awaitState { it.newestRun?.id == "runNew" }
+
+        // The build run was created in AGENT mode with the canned, non-empty prompt.
+        assertEquals(AgentMode.AGENT, capturedMode)
+        assertEquals("Implement the approved plan above.", capturedPrompt)
+        // The new run's mode is persisted as AGENT (a known value, not a guess), so latestMode flips
+        // to "agent" and Build hides afterward.
+        vm.awaitState { it.latestMode == AgentMode.AGENT }
+        assertEquals(AgentMode.AGENT, db.runModeDao().modeForRun("runNew"))
+        assertFalse("Build must hide once the agent run starts", vm.uiState.value.canBuild)
+        assertFalse(vm.uiState.value.isBuilding)
+    }
+
+    @Test
+    fun buildPlan_whenAgentBusy_surfacesMessage_preservesPlanRun_andKeepsBuildAvailable() = runBlocking {
+        val agentId = "agentBusy"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, _ -> throw CursorApiException(409, "agent_busy", "busy") },
+            onGetRun = { _, _ -> planRun },
+        )
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+        vm.awaitState { !it.isLoading && it.canBuild }
+
+        vm.buildPlan()
+        vm.awaitState { it.transientMessage != null }
+
+        val state = vm.uiState.value
+        assertFalse(state.isBuilding)
+        assertEquals("Agent is busy — wait for the current run to finish.", state.transientMessage)
+        // The plan run is untouched and Build stays available to retry.
+        assertEquals("runOld", state.newestRun?.id)
+        assertEquals(AgentMode.PLAN, state.latestMode)
+        assertTrue(state.canBuild)
+    }
+
+    @Test
+    fun buildPlan_whenNetworkFails_surfacesConnectionMessage_andPreservesPlanRun() = runBlocking {
+        val agentId = "agentNet"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, _ -> throw IOException("offline") },
+            onGetRun = { _, _ -> planRun },
+        )
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+        vm.awaitState { !it.isLoading && it.canBuild }
+
+        vm.buildPlan()
+        vm.awaitState { it.transientMessage != null }
+
+        val state = vm.uiState.value
+        assertFalse(state.isBuilding)
+        assertEquals("Check your connection", state.transientMessage)
+        assertEquals("runOld", state.newestRun?.id)
+        assertTrue("no run created → Build stays available", state.canBuild)
+        // A failed create must not fabricate a mode row for a run that never existed.
+        assertTrue(db.runModeDao().runModesForAgent(agentId).none { it.runId != "runOld" })
+    }
+
+    @Test
+    fun canBuild_truthTable() {
+        val terminalRun = Run(
+            id = "r", agentId = "a", status = RunStatus.FINISHED, createdAt = "t", updatedAt = "t",
+        )
+        val activeRun = terminalRun.copy(status = RunStatus.RUNNING)
+
+        // plan + terminal → Build offered.
+        assertTrue(
+            AgentDetailUiState(
+                newestRun = terminalRun,
+                liveRunStatus = RunStatus.FINISHED,
+                latestMode = AgentMode.PLAN,
+            ).canBuild,
+        )
+        // plan + active → hidden (run still running).
+        assertFalse(
+            AgentDetailUiState(
+                newestRun = activeRun,
+                liveRunStatus = RunStatus.RUNNING,
+                latestMode = AgentMode.PLAN,
+            ).canBuild,
+        )
+        // agent + terminal → hidden (never after a normal agent run).
+        assertFalse(
+            AgentDetailUiState(
+                newestRun = terminalRun,
+                liveRunStatus = RunStatus.FINISHED,
+                latestMode = AgentMode.AGENT,
+            ).canBuild,
+        )
+        // unknown mode + terminal → hidden (never on a guessed/unknown mode).
+        assertFalse(
+            AgentDetailUiState(
+                newestRun = terminalRun,
+                liveRunStatus = RunStatus.FINISHED,
+                latestMode = null,
+            ).canBuild,
+        )
+        // plan + terminal but still streaming/replaying → hidden until settled.
+        assertFalse(
+            AgentDetailUiState(
+                newestRun = terminalRun,
+                liveRunStatus = RunStatus.FINISHED,
+                latestMode = AgentMode.PLAN,
+                isStreaming = true,
+            ).canBuild,
         )
     }
 

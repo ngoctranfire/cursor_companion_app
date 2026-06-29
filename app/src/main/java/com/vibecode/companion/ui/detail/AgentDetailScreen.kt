@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.CircularProgressIndicator
@@ -120,6 +121,7 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
         onViewLatest = vm::viewLatest,
         onFollowUpTextChange = vm::onFollowUpTextChange,
         onSendFollowUp = vm::sendFollowUp,
+        onBuildPlan = vm::buildPlan,
     )
 }
 
@@ -142,6 +144,7 @@ fun AgentDetailScreen(agentId: String, onBack: () -> Unit) {
  * @param onViewLatest invoked to return from a past run to the latest one.
  * @param onFollowUpTextChange invoked as the composer text changes.
  * @param onSendFollowUp invoked to send the composed follow-up.
+ * @param onBuildPlan invoked by the contextual Build button to implement a finished plan.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -158,6 +161,7 @@ fun AgentDetailContent(
     onViewLatest: () -> Unit,
     onFollowUpTextChange: (String) -> Unit,
     onSendFollowUp: () -> Unit,
+    onBuildPlan: () -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -224,12 +228,19 @@ fun AgentDetailContent(
             )
         },
         bottomBar = {
-            FollowUpComposer(
-                text = state.followUpText,
-                onTextChange = onFollowUpTextChange,
-                onSend = onSendFollowUp,
-                isSending = state.isSending,
-            )
+            Column {
+                // Contextual bridge from a finished plan to building it. Visible only when the newest
+                // run is a terminal PLAN run (state.canBuild); stays up but disabled while building.
+                if (state.canBuild) {
+                    BuildActionBar(isBuilding = state.isBuilding, onBuild = onBuildPlan)
+                }
+                FollowUpComposer(
+                    text = state.followUpText,
+                    onTextChange = onFollowUpTextChange,
+                    onSend = onSendFollowUp,
+                    isSending = state.isSending,
+                )
+            }
         },
     ) { padding ->
         val loadError = state.loadError
@@ -472,6 +483,45 @@ private fun SectionHeader(label: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 2.dp),
     )
+}
+
+/**
+ * Contextual "Build" action shown above the composer once a plan-mode run has finished: a primary
+ * CTA that launches an agent run to implement the approved plan. Mirrors the Cancel button's
+ * in-flight contract — while [isBuilding] the button shows a spinner and ignores taps.
+ */
+@Composable
+private fun BuildActionBar(isBuilding: Boolean, onBuild: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
+        Column(Modifier.fillMaxWidth()) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "Plan ready — build it into changes.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                GradientButton(
+                    text = if (isBuilding) "Building…" else "Build this plan",
+                    onClick = onBuild,
+                    enabled = !isBuilding,
+                    loading = isBuilding,
+                    leading = {
+                        Icon(
+                            imageVector = Icons.Default.Build,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    },
+                )
+            }
+        }
+    }
 }
 
 /**

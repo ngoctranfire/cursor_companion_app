@@ -5,6 +5,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.vibecode.companion.data.api.AgentMode
 import com.vibecode.companion.data.api.AgentStatus
 import com.vibecode.companion.data.api.CloudAgent
 import com.vibecode.companion.data.api.RepoConfig
@@ -56,6 +57,7 @@ class AgentDetailScreenshotTest {
                     onViewLatest = {},
                     onFollowUpTextChange = {},
                     onSendFollowUp = {},
+                    onBuildPlan = {},
                 )
             }
         }
@@ -74,6 +76,25 @@ class AgentDetailScreenshotTest {
                 pastRuns = listOf(PAST_RUN),
                 timeline = TIMELINE,
                 liveRunStatus = RunStatus.FINISHED,
+            ),
+        )
+    }
+
+    /**
+     * The Build-visible state: a finished PLAN-mode run, so the contextual "Build this plan"
+     * action bar appears above the composer (canBuild == true). This is CUR-8's headline state.
+     */
+    @Test
+    fun agentDetail_buildVisible() {
+        capture(
+            "AgentDetail_buildVisible",
+            AgentDetailUiState(
+                isLoading = false,
+                agent = PLAN_AGENT,
+                newestRun = PLAN_RUN,
+                timeline = PLAN_TIMELINE,
+                liveRunStatus = RunStatus.FINISHED,
+                latestMode = AgentMode.PLAN,
             ),
         )
     }
@@ -156,6 +177,46 @@ class AgentDetailScreenshotTest {
             updatedAt = "1d ago",
             durationMs = 92_000L,
             result = "Initial attempt: added a retry around the login flow.",
+        )
+
+        // A finished plan-mode agent — the state CUR-8's Build action gates on.
+        val PLAN_AGENT = CloudAgent(
+            id = "agent_plan",
+            name = "Add offline caching",
+            status = AgentStatus.ACTIVE,
+            url = "https://cursor.com/agents/agent_plan",
+            createdAt = "5m ago",
+            updatedAt = "5m ago",
+        )
+
+        val PLAN_RUN = Run(
+            id = "run_plan",
+            agentId = "agent_plan",
+            status = RunStatus.FINISHED,
+            createdAt = "5m ago",
+            updatedAt = "5m ago",
+            durationMs = 64_000L,
+            result = "Plan ready for review.",
+        )
+
+        val PLAN_TIMELINE = listOf(
+            TimelineItem.UserPrompt("Plan how to add offline caching for the agent list."),
+            TimelineItem.Thinking(
+                "I'll outline the layers to touch — a Room-backed cache, a repository read-through, " +
+                    "and a staleness policy — before writing any code.",
+            ),
+            TimelineItem.AssistantText(
+                "Here's the plan:\n\n1. Add an `AgentCacheDao` + entity keyed by agent id.\n" +
+                    "2. Read-through the cache in `AgentRepository`, refreshing in the background.\n" +
+                    "3. Show cached results immediately, then reconcile with the live fetch.\n\n" +
+                    "Tap Build to implement this.",
+            ),
+            TimelineItem.ResultCard(
+                status = RunStatus.FINISHED,
+                text = "Plan ready for review.",
+                durationMs = 64_000L,
+                git = null,
+            ),
         )
 
         val TIMELINE = listOf(
