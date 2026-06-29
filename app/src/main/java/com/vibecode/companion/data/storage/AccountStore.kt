@@ -45,24 +45,70 @@ class AccountStore(
      * Ordering matters: Room is cleared **first** so a failure leaves the previous account fully
      * intact rather than half-wiped — if the DataStore (API key + state) were cleared first and
      * then the Room call threw, the `run_modes` / `preference_profiles` rows would linger on disk
-     * for the next account to inherit, defeating the isolation this wipe exists to provide. Any
-     * Room failure is mapped to [IOException] so the sign-out caller's existing error handling
-     * surfaces it (snackbar, stay signed in) instead of crashing on an unhandled exception.
+     * for the next account to inherit, defeating the isolation this wipe exists to provide. The
+     * auth token (which lives in the DataStore) is therefore cleared **only after** Room succeeds:
+     * a new account can sign in only once the token is gone, and by then the rows it could inherit
+     * are already gone too.
      *
-     * @throws IOException if either backing store fails to clear.
+     * The two clears are attempted best-effort and the *outcome* is gated on the auth-token clear
+     * specifically. If the DataStore clear throws **after** Room was already wiped, the token
+     * survives — so the user stays signed in on the **same** account (no cross-account exposure)
+     * and can retry deterministically (the Room clear is idempotent once empty) rather than being
+     * left in an inconsistent "data destroyed, session still live" limbo with no recovery. Any
+     * failure is surfaced as [IOException] so the sign-out caller's existing handling kicks in
+     * (snackbar, stay signed in) instead of crashing on an unhandled exception.
+     *
+     * @throws IOException if the wipe did not complete (the auth token was not cleared).
      */
     suspend fun clearAccountData() = writeCoordinator.wipe {
+        var failure: Throwable? = null
+
+        // Room first (Cluster A): the auth token below is cleared only if this succeeds, so a Room
+        // failure leaves the previous account fully intact — no new account can inherit the rows.
         // clearAllTables() runs its own transaction and must not be called on the main thread.
-        try {
+        val roomCleared = try {
             withContext(Dispatchers.IO) { database.clearAllTables() }
+            true
         } catch (e: CancellationException) {
             throw e // never swallow cancellation — structured concurrency depends on it
         } catch (e: Exception) {
-            throw IOException("Failed to clear the local database on sign-out", e)
+            failure = e
+            false
         }
-        // The Room tables are wiped; drop the in-memory launch → detail mode bridge too so no
-        // remembered-but-not-yet-persisted mode survives the wipe (the durable rows are gone).
-        runModeStore.clearPending()
+
+        var sessionCleared = false
+        if (roomCleared) {
+            // The Room tables are wiped; drop the in-memory launch → detail mode bridge too so no
+            // remembered-but-not-yet-persisted mode survives the wipe (the durable rows are gone).
+            runModeStore.clearPending()
+            // Clear the auth token (and the rest of the shared DataStore) last, in isolation. If
+            // this throws, Room is already gone but the token survives → the user stays signed in
+            // on the SAME account and retries; a *new* account can never read the half-wiped store.
+            sessionCleared = try {
+                clearSessionStore()
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failure = e
+                false
+            }
+        }
+
+        // The sign-out only completes — and the caller only navigates away — when the auth token is
+        // gone. Otherwise surface IOException so AgentListViewModel keeps the user signed in.
+        if (!sessionCleared) {
+            throw IOException("Failed to clear account data on sign-out", failure)
+        }
+    }
+
+    /**
+     * Clears the shared DataStore that holds the auth token (and the rest of the account's
+     * preference state). A seam (not a hard-coded call) so a test can deterministically force the
+     * "DataStore clear fails after Room already cleared" partial-failure path; production always
+     * uses the real wipe below.
+     */
+    internal var clearSessionStore: suspend () -> Unit = {
         context.companionDataStore.edit { it.clear() }
     }
 }

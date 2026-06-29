@@ -270,18 +270,27 @@ class AgentDetailViewModel(
                     // RunModeStore.remember). For legacy or externally-created runs the mode is
                     // genuinely unknown, and stamping a guess (e.g. "agent") would fabricate a mode
                     // row, poisoning the latest-mode signal CUR-8's Build action gates on. Persist
-                    // nothing and leave latestMode null until a mode is genuinely observed. Resolved
-                    // first so a later prompt-save failure can't drop an already-known mode.
+                    // nothing and leave latestMode null until a mode is genuinely observed.
                     inheritedMode = priorNewest?.let { runModeStore.modeForRun(it.id) }
-                    promptStore.save(run.id, text)
-                    if (inheritedMode != null) {
-                        runModeStore.recordMode(run.id, agentId, inheritedMode)
+                    // Record the mode FIRST and isolate the two writes so neither failure skips the
+                    // other. A prompt-save failure must NOT drop an already-known mode write: with no
+                    // mode row, observeMode(run.id) re-emits null and overrides the eagerly-set
+                    // latestMode below, hiding CUR-8's mode-gated Build for this follow-up forever.
+                    val resolvedMode = inheritedMode
+                    var anyFailed = false
+                    if (resolvedMode != null) {
+                        anyFailed = !runLocalWrite(run.id) { runModeStore.recordMode(run.id, agentId, resolvedMode) }
                     }
-                    false
+                    if (!runLocalWrite(run.id) { promptStore.save(run.id, text) }) {
+                        anyFailed = true
+                    }
+                    anyFailed
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to persist follow-up local state for run ${run.id}", e)
+                    // Only the modeForRun *read* can still reach here (the writes above are isolated);
+                    // treat it like a failed local write — keep the created run, mode stays null.
+                    Log.w(TAG, "Failed to resolve follow-up mode for run ${run.id}", e)
                     true
                 }
                 lastEventId = null
@@ -319,6 +328,22 @@ class AgentDetailViewModel(
             }
         }
     }
+
+    /**
+     * Runs one best-effort follow-up local write. Returns `true` on success; on failure logs and
+     * returns `false` so the *other* write still runs and the already-created run is never failed
+     * (no duplicate-send retry). Cancellation propagates so structured concurrency still unwinds.
+     */
+    private suspend fun runLocalWrite(runId: String, block: suspend () -> Unit): Boolean =
+        try {
+            block()
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to persist follow-up local state for run $runId", e)
+            false
+        }
 
     /** Requests cancellation of the in-flight newest run, then refreshes to reflect the outcome. */
     fun cancelRun() {

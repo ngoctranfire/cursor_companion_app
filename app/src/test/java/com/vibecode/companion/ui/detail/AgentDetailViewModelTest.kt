@@ -190,6 +190,45 @@ class AgentDetailViewModelTest {
         assertEquals("Run created, but local state could not be saved.", state.transientMessage)
     }
 
+    @Test
+    fun followUp_whenPromptSaveFails_stillRecordsInheritedMode_soBuildNotHidden() = runBlocking {
+        val agentId = "agentP"
+        val priorRun = run(id = "runOld", agentId = agentId)
+        val followUpRun = run(id = "runNew", agentId = agentId)
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(priorRun)) },
+            onCreateRun = { _, _ -> CreateRunResponse(run = followUpRun) },
+            onGetRun = { _, _ -> followUpRun },
+        )
+        // Prior run's mode IS known, so the follow-up should inherit and persist it for the new run.
+        runModeStore.recordMode("runOld", agentId, "plan")
+        // The prompt save fails — this must NOT skip the mode write (the two are isolated, mode first).
+        val failingPromptStore = ThrowingSavePromptStore(context)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), failingPromptStore, runModeStore, agentId)
+
+        vm.awaitState { !it.isLoading && it.newestRun?.id == "runOld" }
+        vm.onFollowUpTextChange("keep going")
+        vm.sendFollowUp()
+        vm.awaitState { it.newestRun?.id == "runNew" }
+
+        // The inherited mode was still recorded despite the prompt-save failure: Room has the row and
+        // latestMode reflects it — CUR-8's mode-gated Build is NOT hidden for this follow-up.
+        vm.awaitState { it.latestMode == "plan" }
+        assertEquals("plan", vm.uiState.value.latestMode)
+        assertEquals("plan", db.runModeDao().modeForRun("runNew"))
+        // The send still succeeded and surfaced the non-fatal note rather than a duplicate-retry error.
+        assertEquals(
+            "Run created, but local state could not be saved.",
+            vm.uiState.value.transientMessage,
+        )
+    }
+
+    /** A [PromptStore] whose `save` always fails, to exercise the prompt-save vs mode-write isolation. */
+    private class ThrowingSavePromptStore(context: Context) : PromptStore(context) {
+        override suspend fun save(runId: String, prompt: String): Unit = throw IOException("prompt store down")
+    }
+
     /** A [RunModeDao] whose persistence ops fail, to exercise the post-create local-write isolation. */
     private class ThrowingRunModeDao : RunModeDao {
         override suspend fun upsert(entity: RunModeEntity): Unit = throw IOException("db down")

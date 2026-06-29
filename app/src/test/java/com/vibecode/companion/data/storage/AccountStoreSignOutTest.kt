@@ -121,6 +121,34 @@ class AccountStoreSignOutTest {
     }
 
     /**
+     * The *other half* of the ordering guarantee: when the DataStore clear fails **after** Room was
+     * already wiped, the result must still be consistent — Room is empty, but because the auth token
+     * (carried in the DataStore) survived, the user stays signed in on the SAME account and the
+     * failure surfaces as [IOException] for a deterministic retry. There must be no "data destroyed
+     * but session still live with a *new* account able to read old rows" limbo: a new account can
+     * only sign in once the token is gone, and the token is gone only once Room already is.
+     */
+    @Test
+    fun clearAccountData_whenDataStoreClearFailsAfterRoomCleared_isConsistent_andSurfacesIoException() = runBlocking {
+        // Seed both backends, then force the session-store (DataStore) clear to throw — Room still
+        // clears successfully first, reproducing the "DataStore throws after Room already cleared" path.
+        db.runModeDao().upsert(RunModeEntity(runId = "run1", agentId = "agentA", mode = "plan", recordedAtEpochMs = 1))
+        val tokenKey = stringPreferencesKey("auth_token")
+        context.companionDataStore.edit { it[tokenKey] = "session-alive" }
+        accountStore.clearSessionStore = { throw IOException("simulated DataStore write failure") }
+
+        val error = runCatching { accountStore.clearAccountData() }.exceptionOrNull()
+
+        // Surfaced as IOException → signOut() keeps the user signed in for retry.
+        assertTrue("expected IOException but was $error", error is IOException)
+        // Room WAS cleared (the failure came after) ...
+        assertNull(db.runModeDao().latestModeForAgent("agentA"))
+        // ... but the auth token survived, so the session is still live on the SAME account — never a
+        // signed-out state a *new* account could exploit to read the (now-empty) Room rows.
+        assertEquals("session-alive", context.companionDataStore.data.first()[tokenKey])
+    }
+
+    /**
      * Regression for the in-flight-write cross-account leak: a fire-and-forget account write that
      * is *in flight* when sign-out begins must be cancelled before the wipe, so it can never
      * resurrect the previous account's data into the freshly cleared stores. Whatever the

@@ -299,7 +299,12 @@ class LaunchViewModel(
             preferenceProfileStore.saveLaunchDefaults(
                 LaunchDefaults(
                     repoUrl = repo,
-                    modelId = state.selectedModelId,
+                    // Persist the SAME membership-filtered id launch() actually sent (see the
+                    // create request above). When the selected id isn't in the freshly loaded
+                    // `models`, launch() drops it and the agent runs on the server default, so
+                    // persisting the raw `selectedModelId` would save a default never used and
+                    // revive a stale/invalid selection on next open. Filtered → null in that case.
+                    modelId = state.selectedModelId?.takeIf { id -> state.models.any { it.id == id } },
                     autoCreatePr = state.autoCreatePr,
                     mode = chosenMode,
                 ),

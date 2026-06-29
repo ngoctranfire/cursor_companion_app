@@ -316,6 +316,75 @@ class LaunchViewModelTest {
         assertEquals("a still-offered restored model must be honored", ModelRef("m1"), captured?.model)
     }
 
+    // ---- R5: launch defaults must persist the SAME filtered model id launch() actually sent ----
+
+    @Test
+    fun launch_whenModelAbsentFromLoadedList_persistsNullModelId_notStaleId() = runBlocking {
+        // Returning user with a saved model the server no longer offers: the list fails to load, so the
+        // restored id survives in state but is NOT a member of the (empty) list. repoUrl starts at the
+        // factory null so the persisted write flipping it to "repoA" is a reliable bookkeeping barrier.
+        preferenceProfileStore.saveLaunchDefaults(
+            LaunchDefaults(repoUrl = null, modelId = "old-model", autoCreatePr = true, mode = "agent"),
+        )
+        repoCache.save(listOf("repoA"), nowEpochMs = 1)
+        var captured: CreateAgentRequest? = null
+        val api = FakeCursorApiClient(
+            onListModels = { throw IOException("models down") },
+            onCreateAgent = { req -> captured = req; createAgentResponse() },
+        )
+
+        val vm = viewModel(api)
+        vm.awaitState { it.selectedModelId == "old-model" && it.repoUrls.contains("repoA") }
+        vm.selectRepo("repoA")
+        vm.setPrompt("do the thing")
+
+        vm.launch()
+        vm.awaitState { it.launchedAgentId != null }
+
+        // The request degraded to the server default (R4 membership gate)...
+        assertNull("a non-member id must not be sent", captured?.model)
+        // ...and persistence must MATCH it: the stale id is not revived to be restored on next open.
+        withTimeout(10_000) {
+            while (preferenceProfileStore.launchDefaults().repoUrl != "repoA") yield()
+        }
+        assertNull(
+            "persisted modelId must be the filtered value launch() used, not the stale id",
+            preferenceProfileStore.launchDefaults().modelId,
+        )
+    }
+
+    @Test
+    fun launch_whenModelStillOffered_persistsTheValidModelId() = runBlocking {
+        // The mirror: a still-offered restored model is both sent AND persisted, so the happy path
+        // doesn't regress to dropping a valid selection. repoUrl null → "repoA" is the write barrier.
+        preferenceProfileStore.saveLaunchDefaults(
+            LaunchDefaults(repoUrl = null, modelId = "m1", autoCreatePr = true, mode = "agent"),
+        )
+        repoCache.save(listOf("repoA"), nowEpochMs = 1)
+        val api = FakeCursorApiClient(
+            onListModels = { ListModelsResponse(items = listOf(ModelListItem("m1", "M1"))) },
+            onCreateAgent = { createAgentResponse() },
+        )
+
+        val vm = viewModel(api)
+        // Wait for the model list to load (models populated) so the membership filter has it.
+        vm.awaitState { it.selectedModelId == "m1" && it.models.isNotEmpty() && it.repoUrls.contains("repoA") }
+        vm.selectRepo("repoA")
+        vm.setPrompt("do the thing")
+
+        vm.launch()
+        vm.awaitState { it.launchedAgentId != null }
+
+        withTimeout(10_000) {
+            while (preferenceProfileStore.launchDefaults().repoUrl != "repoA") yield()
+        }
+        assertEquals(
+            "a still-offered restored model must be persisted",
+            "m1",
+            preferenceProfileStore.launchDefaults().modelId,
+        )
+    }
+
     // ---- R5: a failing launchDefaults() restore must fall back, not crash ----
 
     @Test
