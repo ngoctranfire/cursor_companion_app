@@ -231,7 +231,9 @@ fun AgentDetailContent(
             Column {
                 // Contextual bridge from a finished plan to building it. Visible only when the newest
                 // run is a terminal PLAN run (state.canBuild); stays up but disabled while building.
-                if (state.canBuild) {
+                // Hidden while a follow-up is being sent so the two run-creation paths can't both fire
+                // (the follow-up's optimistic swap hasn't happened yet, so canBuild is still true).
+                if (state.canBuild && !state.isSending) {
                     BuildActionBar(isBuilding = state.isBuilding, onBuild = onBuildPlan)
                 }
                 FollowUpComposer(
@@ -239,6 +241,8 @@ fun AgentDetailContent(
                     onTextChange = onFollowUpTextChange,
                     onSend = onSendFollowUp,
                     isSending = state.isSending,
+                    // Block sending while a Build is in flight — only one run-creation path at a time.
+                    enabled = !state.isBuilding,
                 )
             }
         },
@@ -534,6 +538,7 @@ private fun FollowUpComposer(
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
     isSending: Boolean,
+    enabled: Boolean = true,
 ) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
         Column(Modifier.fillMaxWidth()) {
@@ -556,7 +561,7 @@ private fun FollowUpComposer(
                     maxLines = 4,
                 )
                 Spacer(Modifier.width(10.dp))
-                val sendEnabled = text.isNotBlank() && !isSending
+                val sendEnabled = enabled && text.isNotBlank() && !isSending
                 Box(
                     modifier = Modifier
                         .padding(bottom = 4.dp)

@@ -18,6 +18,7 @@ import com.vibecode.companion.data.storage.db.RunModeDao
 import com.vibecode.companion.data.storage.db.RunModeEntity
 import com.vibecode.companion.testutil.FakeCursorApiClient
 import com.vibecode.companion.testutil.FakeRunStreamClient
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -317,6 +318,81 @@ class AgentDetailViewModelTest {
     }
 
     @Test
+    fun whileBuildInFlight_sendFollowUpIsNoOp_onlyOneCreateRun() = runBlocking {
+        val agentId = "agentMx1"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val buildRun = run(id = "runNew", agentId = agentId)
+        // Hold the first createRun in flight so the second path's guard is exercised deterministically.
+        val gate = CompletableDeferred<Unit>()
+        var createRunCalls = 0
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, _ ->
+                createRunCalls++
+                gate.await()
+                CreateRunResponse(run = buildRun)
+            },
+            onGetRun = { _, _ -> buildRun },
+        )
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+        vm.awaitState { !it.isLoading && it.canBuild }
+
+        // Start a Build; its createRun suspends on the gate, so isBuilding stays true.
+        vm.buildPlan()
+        vm.awaitState { it.isBuilding }
+
+        // A typed follow-up while building must be a NO-OP — the reciprocal guard blocks a 2nd createRun.
+        vm.onFollowUpTextChange("squeeze in a follow-up")
+        vm.sendFollowUp()
+        assertEquals("sendFollowUp must not create a run while building", 1, createRunCalls)
+        assertFalse("sendFollowUp must stay inert while building", vm.uiState.value.isSending)
+
+        // Release the build; it completes as the sole created run.
+        gate.complete(Unit)
+        vm.awaitState { it.newestRun?.id == "runNew" }
+        assertEquals("exactly one createRun overall", 1, createRunCalls)
+    }
+
+    @Test
+    fun whileFollowUpInFlight_buildPlanIsNoOp_onlyOneCreateRun() = runBlocking {
+        val agentId = "agentMx2"
+        val planRun = run(id = "runOld", agentId = agentId)
+        val followUpRun = run(id = "runNew", agentId = agentId)
+        val gate = CompletableDeferred<Unit>()
+        var createRunCalls = 0
+        val api = FakeCursorApiClient(
+            onGetAgent = { agent(agentId) },
+            onListRuns = { ListRunsResponse(items = listOf(planRun)) },
+            onCreateRun = { _, _ ->
+                createRunCalls++
+                gate.await()
+                CreateRunResponse(run = followUpRun)
+            },
+            onGetRun = { _, _ -> followUpRun },
+        )
+        // Newest run is a terminal PLAN run (so buildPlan would otherwise be actionable).
+        runModeStore.recordMode("runOld", agentId, AgentMode.PLAN)
+        val vm = AgentDetailViewModel(api, FakeRunStreamClient(), promptStore, runModeStore, agentId)
+        vm.awaitState { !it.isLoading && it.canBuild }
+
+        // Start a follow-up; its createRun suspends on the gate, so isSending stays true.
+        vm.onFollowUpTextChange("keep going")
+        vm.sendFollowUp()
+        vm.awaitState { it.isSending }
+
+        // A Build tap while the follow-up is in flight must be a NO-OP — no 2nd createRun.
+        vm.buildPlan()
+        assertEquals("buildPlan must not create a run while a follow-up is in flight", 1, createRunCalls)
+        assertFalse("buildPlan must stay inert while sending", vm.uiState.value.isBuilding)
+
+        gate.complete(Unit)
+        vm.awaitState { it.newestRun?.id == "runNew" }
+        assertEquals("exactly one createRun overall", 1, createRunCalls)
+    }
+
+    @Test
     fun canBuild_truthTable() {
         val terminalRun = Run(
             id = "r", agentId = "a", status = RunStatus.FINISHED, createdAt = "t", updatedAt = "t",
@@ -355,13 +431,22 @@ class AgentDetailViewModelTest {
                 latestMode = null,
             ).canBuild,
         )
-        // plan + terminal but still streaming/replaying → hidden until settled.
+        // plan + terminal but still streaming → hidden until the live stream settles.
         assertFalse(
             AgentDetailUiState(
                 newestRun = terminalRun,
                 liveRunStatus = RunStatus.FINISHED,
                 latestMode = AgentMode.PLAN,
                 isStreaming = true,
+            ).canBuild,
+        )
+        // plan + terminal but still replaying history → hidden until the replay settles.
+        assertFalse(
+            AgentDetailUiState(
+                newestRun = terminalRun,
+                liveRunStatus = RunStatus.FINISHED,
+                latestMode = AgentMode.PLAN,
+                isReplaying = true,
             ).canBuild,
         )
     }

@@ -271,7 +271,10 @@ class AgentDetailViewModel(
     /** Creates a new run from the typed follow-up, then streams it as the newest run. */
     fun sendFollowUp() {
         val text = _uiState.value.followUpText.trim()
-        if (text.isEmpty() || _uiState.value.isSending) return
+        // Reciprocal in-flight guard: a follow-up and a Build both create a run for this agent, so
+        // only one may be in flight. Bailing while a Build is creating its run prevents two racing
+        // createRun calls whose optimistic newest-run swaps + stream jobs would clobber each other.
+        if (text.isEmpty() || _uiState.value.isSending || _uiState.value.isBuilding) return
         viewModelScope.launch {
             _uiState.update { it.copy(isSending = true) }
             try {
@@ -366,7 +369,9 @@ class AgentDetailViewModel(
      * never caught here, so structured concurrency (e.g. the screen closing) still unwinds.
      */
     fun buildPlan() {
-        if (_uiState.value.isBuilding) return
+        // Reciprocal in-flight guard (see [sendFollowUp]): never start a Build while another
+        // run-creation path (a Build or a follow-up) is still in flight for this agent.
+        if (_uiState.value.isBuilding || _uiState.value.isSending) return
         viewModelScope.launch {
             _uiState.update { it.copy(isBuilding = true) }
             try {
