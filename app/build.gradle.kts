@@ -6,6 +6,9 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.metro)
+    // KSP runs Room's annotation processor (see the `ksp(...)` dependency below). This is
+    // the only KSP consumer in the build — Metro stays a pure kotlinc compiler plugin.
+    alias(libs.plugins.ksp)
     alias(libs.plugins.roborazzi)
 }
 
@@ -105,11 +108,19 @@ dependencies {
     implementation(libs.okhttp.sse)
     implementation(libs.okhttp.logging)
     implementation(libs.androidx.datastore.preferences)
+    // Room (SQLite) for queryable/relational local state (run-mode history + preference
+    // profiles). room-ktx adds the coroutine `suspend`/`Flow` DAO support; the compiler
+    // is wired through KSP (not kapt) — Metro is unaffected and stays a kotlinc plugin.
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.work.runtime.ktx)
     // -compose pulls in metrox-viewmodel transitively (via `api`).
     implementation(libs.metrox.viewmodel.compose)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)
+    // ViewModel unit tests: Dispatchers.setMain so viewModelScope runs on a test dispatcher.
+    testImplementation(libs.kotlinx.coroutines.test)
     // Screenshot testing (Roborazzi + Robolectric, JVM — no device/emulator).
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.roborazzi)

@@ -15,7 +15,7 @@ import kotlinx.serialization.json.Json
  * keyed by run id, bounded, and wiped with the rest of the account data on
  * sign-out. Runs launched outside this app simply have no stored prompt.
  */
-class PromptStore(private val context: Context) {
+open class PromptStore(private val context: Context) {
 
     companion object {
         private val PREF_RUN_PROMPTS = stringPreferencesKey("run_prompts")
@@ -25,7 +25,9 @@ class PromptStore(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
     private val serializer = MapSerializer(String.serializer(), String.serializer())
 
-    suspend fun save(runId: String, prompt: String) {
+    // `open` so tests can supply a save-failing double (the store has no DAO seam to throw through);
+    // production never overrides it.
+    open suspend fun save(runId: String, prompt: String) {
         context.companionDataStore.edit { prefs ->
             val map = decode(prefs[PREF_RUN_PROMPTS]).toMutableMap()
             map[runId] = prompt

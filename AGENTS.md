@@ -101,25 +101,51 @@ the diff.
   errors, clear the stored event id and reconnect fresh — don't keep replaying a
   rejected id.
 
-## Storage (`data/storage/`, DataStore only)
+## Storage (`data/storage/`)
+
+Two backends, split by shape of the data (see **ADR-002** below):
+
+- **DataStore Preferences** (one store, `companion_prefs`) for the encrypted token
+  and simple key/value caches: `ApiKeyStore`, `RepoCache`, `PromptStore`, plus the
+  poll baselines `AgentPollWorker` reads.
+- **Room (SQLite)** in `data/storage/db/` for **queryable/relational** state: the
+  per-run launch-mode log (`RunModeStore` / `run_modes`) and the user's launch-default
+  profiles (`PreferenceProfileStore` / `preference_profiles`).
+
+Non-obvious rules:
 
 - `RepoCache` is **mandatory, not an optimization**: `GET /v1/repositories` is
   rate-limited to ~1 req/min/user. Don't bypass it.
 - `PromptStore` exists because the API **never echoes the prompt back** — persist
-  it locally per run or it's lost.
+  it locally per run or it's lost. **Run mode is the same kind of gap**: the API
+  never returns a run's `plan`/`agent` mode, so `RunModeStore` is the only record of
+  it (the signal CUR-8's "Build" action gates on).
 - The API key is encrypted at rest (AES-256/GCM via the Android Keystore). Don't
-  log it or move it into plaintext preferences.
+  log it or move it into plaintext preferences — and **don't move it into Room**
+  either; the encrypted token stays in DataStore.
+- **Sign-out wipes both backends.** `AccountStore.clearAccountData()` clears the
+  DataStore *and* `CompanionDatabase.clearAllTables()`. If you add a store, make sure
+  sign-out clears it too.
+- Keep **data-layer classes DI-framework-agnostic** (`@Database`/`@Dao`/stores are
+  plain classes; Metro wiring lives in `di/`, mirroring the other stores).
+- Room runs at **`version = 1`, `exportSchema = false`** — no migrations yet. The
+  first schema change must bump the version, flip `exportSchema` on with a
+  `room.schemaLocation`, and add migration + migration tests.
 
 ## Dependency injection (Metro)
 
-We're standardizing DI on **[Metro](https://zacsweers.github.io/metro/1.2.1/)**
-(pinned **1.2.1**), migrating off the manual `AppContainer`. Full playbook:
-**[docs/dependency-injection.md](docs/dependency-injection.md)** — read it before
-touching DI. The non-obvious, mistake-preventing rules:
+DI is **[Metro](https://zacsweers.github.io/metro/1.2.1/)** (pinned **1.2.1**) —
+the only DI mechanism in the app. The migration off the old manual `AppContainer` is
+**complete**; `AppContainer` is gone, so don't reference or reintroduce it. Full
+playbook: **[docs/dependency-injection.md](docs/dependency-injection.md)** — read it
+before touching DI. The non-obvious, mistake-preventing rules:
 
-- Metro is a **Kotlin compiler plugin, not KSP/kapt** — never add KSP for it, and
-  **never bump Kotlin without a compatible Metro release** (the plugin is
-  version-locked to `kotlinc`; check the compat table first).
+- Metro is a **Kotlin compiler plugin, not KSP/kapt** — **never add KSP for
+  Metro**, and **never bump Kotlin without a compatible Metro release** (the plugin
+  is version-locked to `kotlinc`; check the compat table first). KSP *is* applied to
+  the build — but **only for Room's annotation processor** (`room-compiler`), pinned
+  to the Kotlin line (`ksp = "2.3.9"` for Kotlin 2.4.0; ≥2.3.6 is the AGP-9 floor).
+  That's the one and only KSP consumer; don't route Metro or anything else through it.
 - **Constructor injection + factories only — never member injection.**
 - **Compile to validate:** some graph errors appear only at build time (IR
   backend), not in the IDE — run `./gradlew :app:compileDebugKotlin` after any
@@ -134,11 +160,16 @@ touching DI. The non-obvious, mistake-preventing rules:
 
 ## Intentional constraints (don't "fix" these)
 
-- **DI is standardizing on Metro** (migrating off the manual `AppContainer`).
-  Don't introduce Hilt, Koin, Dagger, or fresh hand-rolled wiring — see the
-  **Dependency injection (Metro)** section above.
-- **No database.** Persistence is DataStore Preferences by design — don't add
-  Room/SQLite.
+- **DI is Metro** (the `AppContainer` migration is done; `AppContainer` no longer
+  exists). Don't introduce Hilt, Koin, Dagger, or fresh hand-rolled wiring, and don't
+  bring back `AppContainer` — see the **Dependency injection (Metro)** section above.
+- **Persistence is split, on purpose** (see **ADR-002** and the Storage section):
+  **DataStore Preferences** for the encrypted token and key/value caches, **Room
+  (SQLite)** for queryable/relational state (run-mode history, preference profiles).
+  Room is now sanctioned — this reverses the old "no database, DataStore only" rule.
+  Use the right backend for the shape of the data; don't move the encrypted token
+  into Room, and don't reach for Room for a single boolean flag that DataStore
+  already handles.
 - The user-facing name avoids "Cursor" (trademark); the working name is "Agent
   Companion."
 

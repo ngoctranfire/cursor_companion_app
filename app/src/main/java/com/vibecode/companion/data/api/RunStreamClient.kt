@@ -70,7 +70,14 @@ sealed class RunStreamEvent {
     ) : RunStreamEvent()
 }
 
-class RunStreamClient(
+/**
+ * SSE client for live run event streams.
+ *
+ * `open` (and [streamRun] is `open`) so ViewModel unit tests can subclass it with a fake that emits
+ * a canned event flow — the project keeps no mocking framework and prefers hand-written fakes.
+ * Production always uses the real instance wired in `di/AppBindings`.
+ */
+open class RunStreamClient(
     private val sseClient: OkHttpClient,
     private val apiKeyProvider: suspend () -> String?,
     private val baseUrl: String = CursorApiClient.DEFAULT_BASE_URL,
@@ -82,7 +89,7 @@ class RunStreamClient(
      * failure (emitted as [RunStreamEvent.ConnectionClosed] — reconnect by collecting
      * again with the last seen event id as [lastEventId]).
      */
-    fun streamRun(agentId: String, runId: String, lastEventId: String? = null): Flow<RunStreamEvent> =
+    open fun streamRun(agentId: String, runId: String, lastEventId: String? = null): Flow<RunStreamEvent> =
         callbackFlow {
             val key = apiKeyProvider()
             if (key == null) {

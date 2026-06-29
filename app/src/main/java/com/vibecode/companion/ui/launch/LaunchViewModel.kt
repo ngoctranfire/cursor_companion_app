@@ -1,21 +1,28 @@
 package com.vibecode.companion.ui.launch
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vibecode.companion.data.api.AgentMode
 import com.vibecode.companion.data.api.CreateAgentRequest
+import com.vibecode.companion.data.api.CreateAgentResponse
 import com.vibecode.companion.data.api.CursorApiClient
 import com.vibecode.companion.data.api.CursorApiException
 import com.vibecode.companion.data.api.ModelListItem
 import com.vibecode.companion.data.api.ModelRef
 import com.vibecode.companion.data.api.PromptBody
 import com.vibecode.companion.data.api.RepoConfig
+import com.vibecode.companion.data.storage.AccountWriteCoordinator
+import com.vibecode.companion.data.storage.LaunchDefaults
+import com.vibecode.companion.data.storage.PreferenceProfileStore
 import com.vibecode.companion.data.storage.PromptStore
 import com.vibecode.companion.data.storage.RepoCache
+import com.vibecode.companion.data.storage.RunModeStore
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metrox.viewmodel.ViewModelKey
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,13 +50,26 @@ data class LaunchUiState(
     val launchError: String? = null,
     val launchedAgentId: String? = null,
 ) {
-    val canLaunch: Boolean get() = selectedRepo != null && prompt.isNotBlank() && !launching
+    val canLaunch: Boolean
+        // The selected repo must be present in the loaded list AND the list must be settled (not
+        // mid-fetch). A repo restored from a prior session is only trustworthy once validated
+        // against the freshly loaded repos — without the membership + `!reposLoading` gate, the
+        // no-cache path (where validation happens only after refreshRepos() returns) could launch
+        // a stale repo the server then rejects. The membership check is the launch-time analog of
+        // the loadModels()/refreshRepos() stale-selection drops, keeping repo and model consistent.
+        get() = selectedRepo != null &&
+            selectedRepo in repoUrls &&
+            !reposLoading &&
+            prompt.isNotBlank() &&
+            !launching
 }
 
 /**
- * State holder for the launch screen: loads the repo list (cache-first) and model list, tracks
- * the prompt and launch options, and creates the agent. The launched prompt is saved to
- * [PromptStore] because the API never echoes it back.
+ * State holder for the launch screen: restores the user's saved launch defaults, loads the repo
+ * list (cache-first) and model list, tracks the prompt and launch options, and creates the
+ * agent. The launched prompt is saved to [PromptStore] (the API never echoes it back); the
+ * chosen mode is saved to [RunModeStore] (the API never returns it); and the selections are
+ * saved to [PreferenceProfileStore] so the next launch restores them.
  */
 @Inject
 @ViewModelKey
@@ -58,26 +78,66 @@ class LaunchViewModel(
     private val apiClient: CursorApiClient,
     private val repoCache: RepoCache,
     private val promptStore: PromptStore,
+    private val runModeStore: RunModeStore,
+    private val preferenceProfileStore: PreferenceProfileStore,
+    private val writeCoordinator: AccountWriteCoordinator,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LaunchUiState())
     val uiState: StateFlow<LaunchUiState> = _uiState.asStateFlow()
 
+    private companion object {
+        const val TAG = "LaunchViewModel"
+    }
+
     init {
         viewModelScope.launch {
+            // Restore the user's saved launch defaults first, so a returning user lands on their
+            // last repo / model / options AND the model/repo validation below runs against the
+            // restored selection. Loading models concurrently (the old shape) let validation race
+            // ahead of the restore, see a still-null selection, and let a stale/unsupported id
+            // survive. These are local prefs — the API can't supply them.
+            // Room I/O can fail (corrupt/locked DB); a returning user must still land on a usable
+            // launch screen, so fall back to factory defaults rather than letting the exception
+            // escape viewModelScope.launch and crash the screen.
+            val defaults = try {
+                preferenceProfileStore.launchDefaults()
+            } catch (e: CancellationException) {
+                throw e // never swallow cancellation — structured concurrency depends on it
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to restore launch defaults; using factory defaults", e)
+                PreferenceProfileStore.FACTORY_DEFAULTS
+            }
+            _uiState.update {
+                it.copy(
+                    selectedRepo = defaults.repoUrl,
+                    selectedModelId = defaults.modelId,
+                    autoCreatePr = defaults.autoCreatePr,
+                    planMode = defaults.mode == AgentMode.PLAN,
+                )
+            }
             val cached = repoCache.get()
             if (cached == null) {
-                // First open with no cache at all — fetch once automatically.
-                // A cached-but-empty list is respected (zero repos is a valid state;
-                // re-fetching every open would burn the 1/min rate limit).
+                // First open with no cache at all — fetch once automatically (refreshRepos drops a
+                // restored repo the fetched list doesn't offer). A cached-but-empty list is
+                // respected (zero repos is a valid state; re-fetching every open would burn the
+                // 1/min rate limit).
                 refreshRepos()
             } else {
                 _uiState.update {
-                    it.copy(repoUrls = cached.urls, repoFetchedAtEpochMs = cached.fetchedAtEpochMs)
+                    it.copy(
+                        repoUrls = cached.urls,
+                        repoFetchedAtEpochMs = cached.fetchedAtEpochMs,
+                        // Drop a restored repo the cached list no longer offers, so canLaunch can't
+                        // stay true for an inaccessible repo (the launch would fail server-side).
+                        selectedRepo = it.selectedRepo?.takeIf { url -> url in cached.urls },
+                    )
                 }
             }
+            // Load models only after the saved selection is restored, so loadModels() validates
+            // the restored model id against the freshly loaded list and drops it if unsupported.
+            loadModels()
         }
-        loadModels()
     }
 
     /**
@@ -93,7 +153,15 @@ class LaunchViewModel(
                 val now = System.currentTimeMillis()
                 repoCache.save(urls, now)
                 _uiState.update {
-                    it.copy(reposLoading = false, repoUrls = urls, repoFetchedAtEpochMs = now)
+                    it.copy(
+                        reposLoading = false,
+                        repoUrls = urls,
+                        repoFetchedAtEpochMs = now,
+                        // Drop a selected repo the fresh list no longer offers (mirrors the stale
+                        // model drop in loadModels) so canLaunch can't stay true for a repo the
+                        // user can no longer launch against.
+                        selectedRepo = it.selectedRepo?.takeIf { url -> url in urls },
+                    )
                 }
             } catch (ex: CursorApiException) {
                 val message = if (ex.isRateLimited || ex.code == "rate_limit_exceeded") {
@@ -113,7 +181,12 @@ class LaunchViewModel(
         viewModelScope.launch {
             try {
                 val models = apiClient.listModels().items
-                _uiState.update { it.copy(models = models) }
+                _uiState.update { state ->
+                    // Drop a restored model default the server no longer offers, so the picker
+                    // and the request agree (it falls back to the "Default" model).
+                    val validSelection = state.selectedModelId?.takeIf { id -> models.any { it.id == id } }
+                    state.copy(models = models, selectedModelId = validSelection)
+                }
             } catch (_: CursorApiException) {
                 // Model picker degrades gracefully to "Default" only.
             } catch (_: IOException) {
@@ -151,6 +224,7 @@ class LaunchViewModel(
         val state = _uiState.value
         val repo = state.selectedRepo ?: return
         if (state.prompt.isBlank() || state.launching) return
+        val chosenMode = if (state.planMode) AgentMode.PLAN else AgentMode.AGENT
 
         viewModelScope.launch {
             _uiState.update { it.copy(launching = true, launchError = null) }
@@ -159,15 +233,36 @@ class LaunchViewModel(
                     CreateAgentRequest(
                         prompt = PromptBody(state.prompt),
                         repos = listOf(RepoConfig(url = repo)),
-                        model = state.selectedModelId?.let { ModelRef(it) },
+                        // Only send a ModelRef the freshly loaded list actually offers. The
+                        // launch-time analog of loadModels()'s stale-selection drop: when the model
+                        // list failed to load or is still in flight, `models` is empty, so a restored
+                        // id isn't a member and we degrade to the server default instead of sending a
+                        // removed/unsupported id the create request would reject. Mirrors the repo
+                        // `selectedRepo in repoUrls` membership gate.
+                        model = state.selectedModelId
+                            ?.takeIf { id -> state.models.any { it.id == id } }
+                            ?.let { ModelRef(it) },
                         autoCreatePR = state.autoCreatePr,
-                        mode = if (state.planMode) AgentMode.PLAN else AgentMode.AGENT,
+                        mode = chosenMode,
                     ),
                 )
-                // Remember the prompt locally — the API never returns it, and the
-                // detail screen renders it at the top of the run timeline.
-                promptStore.save(response.run.id, state.prompt)
+                // Remember the chosen mode synchronously (in-memory, on the app-scoped RunModeStore
+                // singleton) BEFORE navigating: persistLaunchResult below records it to Room on the
+                // background write scope, so a fast follow-up on the detail screen could read Room
+                // before that write lands. The relay closes that window so the follow-up still
+                // inherits the mode. See RunModeStore.remember.
+                runModeStore.remember(response.run.id, chosenMode)
+                // The remote agent exists now, so navigate to it regardless of whether the
+                // on-device bookkeeping below succeeds — a failed local write must never strand
+                // the user on the launch screen.
                 _uiState.update { it.copy(launching = false, launchedAgentId = response.agent.id) }
+                // Persist through the coordinator's durable scope, not viewModelScope: publishing
+                // launchedAgentId above pops the launch screen and clears this VM, cancelling
+                // viewModelScope and aborting these writes mid-flight. The coordinator's scope
+                // outlives the screen so the prompt / run mode / launch defaults are durably saved
+                // even on a fast navigation away — yet a concurrent sign-out cancels these writes
+                // before wiping the stores, so they can't resurrect this account's data afterward.
+                writeCoordinator.launchWrite { persistLaunchResult(response, state, chosenMode, repo) }
             } catch (ex: CursorApiException) {
                 val message = when (ex.code) {
                     "repository_access" ->
@@ -182,6 +277,49 @@ class LaunchViewModel(
             } catch (_: IOException) {
                 _uiState.update { it.copy(launching = false, launchError = "Check your connection") }
             }
+        }
+    }
+
+    /**
+     * Best-effort local bookkeeping after a successful create: the launched prompt ([PromptStore],
+     * the API never echoes it back), the run's mode ([RunModeStore], the API never returns it),
+     * and the user's launch defaults ([PreferenceProfileStore]). Each write is isolated so one
+     * failure doesn't skip the others, and all are non-fatal — the agent already exists, so a
+     * storage error is logged, not surfaced, and never blocks navigation.
+     */
+    private suspend fun persistLaunchResult(
+        response: CreateAgentResponse,
+        state: LaunchUiState,
+        chosenMode: String,
+        repo: String,
+    ) {
+        bestEffort("launch prompt") { promptStore.save(response.run.id, state.prompt) }
+        bestEffort("run mode") { runModeStore.recordMode(response.run.id, response.agent.id, chosenMode) }
+        bestEffort("launch defaults") {
+            preferenceProfileStore.saveLaunchDefaults(
+                LaunchDefaults(
+                    repoUrl = repo,
+                    // Persist the SAME membership-filtered id launch() actually sent (see the
+                    // create request above). When the selected id isn't in the freshly loaded
+                    // `models`, launch() drops it and the agent runs on the server default, so
+                    // persisting the raw `selectedModelId` would save a default never used and
+                    // revive a stale/invalid selection on next open. Filtered → null in that case.
+                    modelId = state.selectedModelId?.takeIf { id -> state.models.any { it.id == id } },
+                    autoCreatePr = state.autoCreatePr,
+                    mode = chosenMode,
+                ),
+            )
+        }
+    }
+
+    /** Runs a non-essential persistence [block], logging (never throwing) on failure. */
+    private suspend inline fun bestEffort(what: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e // never swallow cancellation — structured concurrency depends on it
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to persist $what after launch", e)
         }
     }
 

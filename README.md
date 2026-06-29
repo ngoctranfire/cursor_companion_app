@@ -79,8 +79,12 @@ accessibility services, or local process launching.
 - **SSE** (`RunStreamClient`, `okhttp-sse`) streams live run events while a run
   view is open, with `Last-Event-ID` resume and exponential backoff on
   reconnect.
-- **Persistence** is DataStore Preferences only (no SQLite/Room). The API key is
-  encrypted with an AES-256/GCM key held in the Android Keystore.
+- **Persistence** is split by data shape: **DataStore Preferences** holds the
+  encrypted API key (AES-256/GCM via the Android Keystore) and simple key/value
+  caches (repo list, prompt history, poll baselines), while **Room (SQLite)** holds
+  queryable/relational state — the per-run launch-mode log and the user's launch
+  preference profiles (see [ADR-002](docs/adr/ADR-002-adopt-room.md)). Signing out
+  wipes both.
 - **Background notifications** come from a `WorkManager` worker that polls latest
   run statuses on a schedule and notifies on transitions to a terminal state —
   no foreground service, no push backend (yet; see [Roadmap](#roadmap)).
@@ -101,7 +105,7 @@ which is treated as the source of truth for the client DTOs.
 | Networking      | OkHttp 4.12.0 + `okhttp-sse` + logging interceptor |
 | Serialization   | kotlinx.serialization (JSON) |
 | Async           | Kotlin Coroutines + Flow |
-| Storage         | DataStore Preferences + Android Keystore (encrypted key) |
+| Storage         | DataStore Preferences (encrypted key + caches) + Room/SQLite (relational state) + Android Keystore |
 | Background work | WorkManager |
 | DI              | Metro (compile-time DI, Kotlin compiler plugin) — root `AppGraph` on the `Application` class |
 
@@ -120,7 +124,7 @@ cursor_companion/
 │       │   ├── di/                    # Metro graph: AppGraph + AccountGraph/SessionGraph extensions, scopes, VM factory
 │       │   ├── data/
 │       │   │   ├── api/               # CursorApiClient, RunStreamClient, DTOs
-│       │   │   └── storage/           # ApiKeyStore, RepoCache, PromptStore, DataStore
+│       │   │   └── storage/           # DataStore stores + Room stores; db/ = Room database, entities, DAOs
 │       │   ├── ui/                    # one package per screen (Composable + ViewModel)
 │       │   │   ├── onboarding/        #   paste & validate API key
 │       │   │   ├── agents/            #   agent list / paginate / archive / sign-out
@@ -233,6 +237,10 @@ see [`PLAN.md`](PLAN.md) for the full plan, decisions, and risks.
 - [`PLAN.md`](PLAN.md) — product vision, dated decisions, milestones, and risks.
 - [`AGENTS.md`](AGENTS.md) — how to work in this codebase (build commands,
   architecture, conventions, gotchas). Read this before making changes.
+- [`docs/dependency-injection.md`](docs/dependency-injection.md) — the Metro DI
+  playbook for this codebase.
+- [`docs/adr/`](docs/adr/) — architecture decision records (e.g.
+  [ADR-002 — Adopt Room](docs/adr/ADR-002-adopt-room.md) for the persistence layer).
 - [`docs/cloud-agents-openapi.yaml`](docs/cloud-agents-openapi.yaml) — the Cursor
   Cloud Agents API v1 spec the client is built against.
 

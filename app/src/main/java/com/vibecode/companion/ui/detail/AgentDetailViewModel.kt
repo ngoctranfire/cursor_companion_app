@@ -1,7 +1,9 @@
 package com.vibecode.companion.ui.detail
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vibecode.companion.data.api.AgentMode
 import com.vibecode.companion.data.api.CloudAgent
 import com.vibecode.companion.data.api.CreateRunRequest
 import com.vibecode.companion.data.api.CursorApiClient
@@ -13,6 +15,7 @@ import com.vibecode.companion.data.api.RunStatus
 import com.vibecode.companion.data.api.RunStreamClient
 import com.vibecode.companion.data.api.RunStreamEvent
 import com.vibecode.companion.data.storage.PromptStore
+import com.vibecode.companion.data.storage.RunModeStore
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Assisted
 import dev.zacsweers.metro.AssistedFactory
@@ -20,6 +23,7 @@ import dev.zacsweers.metro.AssistedInject
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metrox.viewmodel.ManualViewModelAssistedFactory
 import dev.zacsweers.metrox.viewmodel.ManualViewModelAssistedFactoryKey
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -80,6 +84,12 @@ data class AgentDetailUiState(
     val followUpText: String = "",
     val isSending: Boolean = false,
     val isCancelling: Boolean = false,
+    /**
+     * The agent's latest recorded launch mode (`plan` / `agent`, see [AgentMode]), or `null`
+     * when unknown — e.g. the agent was launched outside this app or before mode was persisted.
+     * Read from [RunModeStore]; this is the signal CUR-8's "Build" action will gate on.
+     */
+    val latestMode: String? = null,
     /** One-shot snackbar message. */
     val transientMessage: String? = null,
 ) {
@@ -97,6 +107,7 @@ class AgentDetailViewModel(
     private val apiClient: CursorApiClient,
     private val runStreamClient: RunStreamClient,
     private val promptStore: PromptStore,
+    private val runModeStore: RunModeStore,
     @Assisted private val agentId: String,
 ) : ViewModel() {
 
@@ -114,6 +125,7 @@ class AgentDetailViewModel(
     }
 
     private companion object {
+        const val TAG = "AgentDetailVM"
         const val MAX_RECONNECT_ATTEMPTS = 5
         const val INITIAL_BACKOFF_MS = 1_000L
         const val MAX_BACKOFF_MS = 30_000L
@@ -125,6 +137,10 @@ class AgentDetailViewModel(
     private var streamJob: Job? = null
     private var loadJob: Job? = null
     private var lastEventId: String? = null
+
+    /** Live collector of the newest run's mode, plus the run id it's keyed to (re-subscribes on change). */
+    private var modeJob: Job? = null
+    private var observedModeRunId: String? = null
 
     /** Kind of the previous text-producing SSE event, for delta coalescing. */
     private enum class TextKind { ASSISTANT, THINKING }
@@ -234,10 +250,49 @@ class AgentDetailViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isSending = true) }
             try {
+                // The run this follow-up supersedes — its persisted mode (if any) is what the new
+                // run inherits, since the request sends no mode and the server continues in the
+                // current one. Captured before the state swap below.
+                val priorNewest = _uiState.value.newestRun
                 val run = apiClient.createRun(agentId, CreateRunRequest(prompt = PromptBody(text))).run
                 // A stale in-flight load must not overwrite the just-created run.
                 loadJob?.cancel()
-                promptStore.save(run.id, text)
+                // The remote run exists now. From here on a *local* persistence failure must NOT
+                // route into the send-failure path below (which shows an error → the user retries →
+                // a DUPLICATE follow-up). Mirror the launch path's isolation: keep the created run,
+                // and surface a non-fatal note instead of failing the send. CancellationException is
+                // rethrown so structured concurrency (e.g. the screen being closed) still unwinds.
+                var inheritedMode: String? = null
+                val localWriteFailed = try {
+                    // Carry the mode forward ONLY when the prior newest run's mode is actually known
+                    // — from Room, or, when a fast follow-up beats the launch screen's background
+                    // mode write, the in-memory relay that write also populated synchronously (see
+                    // RunModeStore.remember). For legacy or externally-created runs the mode is
+                    // genuinely unknown, and stamping a guess (e.g. "agent") would fabricate a mode
+                    // row, poisoning the latest-mode signal CUR-8's Build action gates on. Persist
+                    // nothing and leave latestMode null until a mode is genuinely observed.
+                    inheritedMode = priorNewest?.let { runModeStore.modeForRun(it.id) }
+                    // Record the mode FIRST and isolate the two writes so neither failure skips the
+                    // other. A prompt-save failure must NOT drop an already-known mode write: with no
+                    // mode row, observeMode(run.id) re-emits null and overrides the eagerly-set
+                    // latestMode below, hiding CUR-8's mode-gated Build for this follow-up forever.
+                    val resolvedMode = inheritedMode
+                    var anyFailed = false
+                    if (resolvedMode != null) {
+                        anyFailed = !runLocalWrite(run.id) { runModeStore.recordMode(run.id, agentId, resolvedMode) }
+                    }
+                    if (!runLocalWrite(run.id) { promptStore.save(run.id, text) }) {
+                        anyFailed = true
+                    }
+                    anyFailed
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Only the modeForRun *read* can still reach here (the writes above are isolated);
+                    // treat it like a failed local write — keep the created run, mode stays null.
+                    Log.w(TAG, "Failed to resolve follow-up mode for run ${run.id}", e)
+                    true
+                }
                 lastEventId = null
                 lastTextKind = null
                 _uiState.update { state ->
@@ -247,10 +302,19 @@ class AgentDetailViewModel(
                         pastRuns = listOfNotNull(state.newestRun) + state.pastRuns,
                         newestRun = run,
                         liveRunStatus = run.status,
+                        latestMode = inheritedMode,
                         timeline = listOf(TimelineItem.UserPrompt(text)),
                         showReconnect = false,
+                        transientMessage = if (localWriteFailed) {
+                            "Run created, but local state could not be saved."
+                        } else {
+                            state.transientMessage
+                        },
                     )
                 }
+                // Re-key the mode observer to the new newest run (set eagerly above for no flicker;
+                // observed so any later write to this run's mode keeps latestMode current).
+                observeMode(run.id)
                 startStreaming(run.id)
             } catch (ex: CursorApiException) {
                 val message = when (ex.code) {
@@ -264,6 +328,22 @@ class AgentDetailViewModel(
             }
         }
     }
+
+    /**
+     * Runs one best-effort follow-up local write. Returns `true` on success; on failure logs and
+     * returns `false` so the *other* write still runs and the already-created run is never failed
+     * (no duplicate-send retry). Cancellation propagates so structured concurrency still unwinds.
+     */
+    private suspend fun runLocalWrite(runId: String, block: suspend () -> Unit): Boolean =
+        try {
+            block()
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to persist follow-up local state for run $runId", e)
+            false
+        }
 
     /** Requests cancellation of the in-flight newest run, then refreshes to reflect the outcome. */
     fun cancelRun() {
@@ -321,6 +401,11 @@ class AgentDetailViewModel(
                         viewedPastRun = if (runChanged) null else state.viewedPastRun,
                     )
                 }
+                // Mode is local-only (the API never returns it). Observe the NEWEST run's persisted
+                // mode reactively so a mode written *after* this load (the launch screen records the
+                // initial run's mode in the background, after navigation) still updates latestMode —
+                // a one-shot read here would miss that late write and leave Build hidden forever.
+                observeMode(newest?.id)
                 if (newest != null && !RunStatus.isTerminal(newest.status)) {
                     if (runChanged || streamJob?.isActive != true) startStreaming(newest.id)
                 } else if (newest != null && seed) {
@@ -335,6 +420,31 @@ class AgentDetailViewModel(
                 reportLoadFailure(ex.message)
             } catch (ex: IOException) {
                 reportLoadFailure("Check your connection")
+            }
+        }
+    }
+
+    /**
+     * (Re)subscribes [latestMode] to [runId]'s mode. Keyed to the run id so it re-subscribes only
+     * when the newest run changes; a `null` run id (no runs) clears the mode. The collected Flow
+     * keeps the value live, so a mode persisted after subscription — e.g. the launch screen's
+     * background `recordMode` for the just-launched run — flips `latestMode` from null to the real
+     * mode without the screen needing a manual refresh. A newest run that never gets a recorded
+     * mode (legacy/external run, or one created before mode persistence) simply stays null, so
+     * CUR-8 hides "Build" rather than wrongly defaulting it to "agent".
+     */
+    private fun observeMode(runId: String?) {
+        if (runId == observedModeRunId && modeJob?.isActive == true) return
+        observedModeRunId = runId
+        modeJob?.cancel()
+        if (runId == null) {
+            modeJob = null
+            _uiState.update { it.copy(latestMode = null) }
+            return
+        }
+        modeJob = viewModelScope.launch {
+            runModeStore.modeForRunFlow(runId).collect { mode ->
+                _uiState.update { it.copy(latestMode = mode) }
             }
         }
     }
