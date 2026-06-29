@@ -14,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -38,6 +39,7 @@ class AccountStoreSignOutTest {
     private lateinit var db: CompanionDatabase
     private lateinit var appScope: CoroutineScope
     private lateinit var writeCoordinator: AccountWriteCoordinator
+    private lateinit var runModeStore: RunModeStore
     private lateinit var accountStore: AccountStore
 
     /** Builds a real context + in-memory Room database before the test, and isolates the DataStore. */
@@ -48,7 +50,8 @@ class AccountStoreSignOutTest {
             .allowMainThreadQueries().build()
         appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         writeCoordinator = AccountWriteCoordinator(appScope)
-        accountStore = AccountStore(context, db, writeCoordinator)
+        runModeStore = RunModeStore(db.runModeDao())
+        accountStore = AccountStore(context, db, writeCoordinator, runModeStore)
         // The shared DataStore is process-global, so a key left behind by one case (e.g. the
         // Room-clear-fails path, which deliberately never reaches the DataStore wipe) would leak
         // into the next. Clear it on the way in AND out so ordering can't make the suite flaky.
@@ -140,8 +143,10 @@ class AccountStoreSignOutTest {
         }
         writeStarted.await() // the write is now parked, i.e. in flight when sign-out runs
 
-        // Sign out: clearAccountData() must cancel+join the in-flight write, THEN wipe.
-        accountStore.clearAccountData()
+        // Sign out: clearAccountData() must cancel+join the in-flight write, THEN wipe. The
+        // withTimeout makes a regression deterministic: if the cancel-then-wipe path ever waits on
+        // a parked write instead of cancelling it, this fails fast instead of hanging forever.
+        withTimeout(5_000) { accountStore.clearAccountData() }
         // Unblock the (now-cancelled) write — it must NOT resurrect anything. In the buggy shape
         // (write on an un-cancelled app scope) this is exactly when the leak would land.
         release.complete(Unit)
@@ -150,5 +155,44 @@ class AccountStoreSignOutTest {
         // have written survives.
         assertNull("Room must not carry resurrected run-mode data", db.runModeDao().modeForRun("ghost"))
         assertNull("DataStore must not carry resurrected data", context.companionDataStore.data.first()[probeKey])
+    }
+
+    /**
+     * Regression for the fire-and-forget crash path: an exception escaping a
+     * [AccountWriteCoordinator.launchWrite] block must be *contained* by the write scope's
+     * [kotlinx.coroutines.CoroutineExceptionHandler] — never reach the default uncaught handler
+     * (which crashes the app) — and must not break the coordinator: a subsequent write still runs
+     * and the wipe path still completes.
+     */
+    @Test
+    fun throwingLaunchWrite_isContained_andSubsequentWriteAndWipeStillWork() = runBlocking {
+        // A throwing write completes without surfacing here (join doesn't rethrow) — the scope's
+        // handler logs it instead of letting it propagate to a crash.
+        writeCoordinator.launchWrite { throw RuntimeException("boom") }.join()
+
+        // The scope survives the failure (SupervisorJob + handler), so a later write still runs.
+        val ran = CompletableDeferred<Unit>()
+        writeCoordinator.launchWrite { ran.complete(Unit) }
+        withTimeout(5_000) { ran.await() }
+
+        // And the wipe path is unaffected by the earlier failure.
+        withTimeout(5_000) { accountStore.clearAccountData() }
+    }
+
+    /**
+     * Sign-out also drops the in-memory launch → detail mode relay, so a mode remembered for the
+     * previous account (its Room write may not even have landed) can't survive into the next session.
+     */
+    @Test
+    fun clearAccountData_clearsInMemoryModeRelay() = runBlocking {
+        runModeStore.remember("ghostRun", "plan")
+        assertEquals("plan", runModeStore.modeForRun("ghostRun"))
+
+        accountStore.clearAccountData()
+
+        assertNull(
+            "the in-memory mode relay must be cleared on sign-out",
+            runModeStore.modeForRun("ghostRun"),
+        )
     }
 }

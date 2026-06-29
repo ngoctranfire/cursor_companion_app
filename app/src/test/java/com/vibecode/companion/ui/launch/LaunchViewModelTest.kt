@@ -4,10 +4,12 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.room.Room
 import com.vibecode.companion.data.api.CloudAgent
+import com.vibecode.companion.data.api.CreateAgentRequest
 import com.vibecode.companion.data.api.CreateAgentResponse
 import com.vibecode.companion.data.api.ListModelsResponse
 import com.vibecode.companion.data.api.ListRepositoriesResponse
 import com.vibecode.companion.data.api.ModelListItem
+import com.vibecode.companion.data.api.ModelRef
 import com.vibecode.companion.data.api.Repository
 import com.vibecode.companion.data.api.Run
 import com.vibecode.companion.data.storage.AccountWriteCoordinator
@@ -18,6 +20,8 @@ import com.vibecode.companion.data.storage.RepoCache
 import com.vibecode.companion.data.storage.RunModeStore
 import com.vibecode.companion.data.storage.companionDataStore
 import com.vibecode.companion.data.storage.db.CompanionDatabase
+import com.vibecode.companion.data.storage.db.PreferenceProfileDao
+import com.vibecode.companion.data.storage.db.PreferenceProfileEntity
 import com.vibecode.companion.testutil.FakeCursorApiClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +45,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.io.IOException
 
 /**
  * Guards CUR-9's launch-restore contract:
@@ -214,6 +219,135 @@ class LaunchViewModelTest {
         val settled = vm.awaitState { !it.reposLoading }
         assertEquals("repoA", settled.selectedRepo)
         assertTrue("valid repo launchable once validated", settled.canLaunch)
+    }
+
+    // ---- R4: a stale restored model id must never reach the create request ----
+
+    @Test
+    fun launch_whenModelListFailed_dropsStaleModelId_andSendsServerDefault() = runBlocking {
+        // Returning user with a saved model; the model list fails to load → models stays empty.
+        preferenceProfileStore.saveLaunchDefaults(
+            LaunchDefaults(repoUrl = "repoA", modelId = "old-model", autoCreatePr = true, mode = "agent"),
+        )
+        repoCache.save(listOf("repoA"), nowEpochMs = 1)
+        var captured: CreateAgentRequest? = null
+        val api = FakeCursorApiClient(
+            onListModels = { throw IOException("models down") },
+            onCreateAgent = { req -> captured = req; createAgentResponse() },
+        )
+
+        val vm = viewModel(api)
+        // The restored stale id survives in state (loadModels never validated it), but...
+        vm.awaitState { it.selectedModelId == "old-model" && it.repoUrls.contains("repoA") }
+        vm.setPrompt("do the thing")
+
+        vm.launch()
+        vm.awaitState { it.launchedAgentId != null }
+        // ...the launch-time membership gate drops it: a failed model list can't send a removed id.
+        assertNull("a failed model list must degrade to the server default", captured?.model)
+    }
+
+    @Test
+    fun launch_whileModelListStillLoading_dropsStaleModelId_andSendsServerDefault() = runBlocking {
+        preferenceProfileStore.saveLaunchDefaults(
+            LaunchDefaults(repoUrl = "repoA", modelId = "old-model", autoCreatePr = true, mode = "agent"),
+        )
+        repoCache.save(listOf("repoA"), nowEpochMs = 1)
+        val modelGate = CompletableDeferred<Unit>() // never completed → list stays in flight
+        var captured: CreateAgentRequest? = null
+        val api = FakeCursorApiClient(
+            onListModels = { modelGate.await(); ListModelsResponse(items = listOf(ModelListItem("old-model", "Old"))) },
+            onCreateAgent = { req -> captured = req; createAgentResponse() },
+        )
+
+        val vm = viewModel(api)
+        vm.awaitState { it.selectedModelId == "old-model" && it.repoUrls.contains("repoA") }
+        vm.setPrompt("do the thing")
+
+        // Launch while the model list is still loading (models still empty).
+        vm.launch()
+        vm.awaitState { it.launchedAgentId != null }
+        assertNull("a pending model list must not let a stale id reach the request", captured?.model)
+    }
+
+    @Test
+    fun launch_whenRestoredModelNotInLoadedList_dropsIt_andSendsServerDefault() = runBlocking {
+        preferenceProfileStore.saveLaunchDefaults(
+            LaunchDefaults(repoUrl = "repoA", modelId = "old-model", autoCreatePr = true, mode = "agent"),
+        )
+        repoCache.save(listOf("repoA"), nowEpochMs = 1)
+        var captured: CreateAgentRequest? = null
+        val api = FakeCursorApiClient(
+            // Loaded list does NOT contain "old-model".
+            onListModels = { ListModelsResponse(items = listOf(ModelListItem("m1", "M1"))) },
+            onCreateAgent = { req -> captured = req; createAgentResponse() },
+        )
+
+        val vm = viewModel(api)
+        // loadModels validated and dropped the unsupported id.
+        vm.awaitState { it.models.isNotEmpty() }
+        assertNull("loadModels drops the unsupported restored id", vm.uiState.value.selectedModelId)
+        vm.setPrompt("do the thing")
+
+        vm.launch()
+        vm.awaitState { it.launchedAgentId != null }
+        assertNull("a restored id absent from the loaded list must not be sent", captured?.model)
+    }
+
+    @Test
+    fun launch_whenRestoredModelStillOffered_honorsIt() = runBlocking {
+        // Happy path must not regress: a valid restored model is honored once the list contains it.
+        preferenceProfileStore.saveLaunchDefaults(
+            LaunchDefaults(repoUrl = "repoA", modelId = "m1", autoCreatePr = true, mode = "agent"),
+        )
+        repoCache.save(listOf("repoA"), nowEpochMs = 1)
+        var captured: CreateAgentRequest? = null
+        val api = FakeCursorApiClient(
+            onListModels = { ListModelsResponse(items = listOf(ModelListItem("m1", "M1"))) },
+            onCreateAgent = { req -> captured = req; createAgentResponse() },
+        )
+
+        val vm = viewModel(api)
+        vm.awaitState { it.selectedModelId == "m1" && it.models.isNotEmpty() }
+        vm.setPrompt("do the thing")
+
+        vm.launch()
+        vm.awaitState { it.launchedAgentId != null }
+        assertEquals("a still-offered restored model must be honored", ModelRef("m1"), captured?.model)
+    }
+
+    // ---- R5: a failing launchDefaults() restore must fall back, not crash ----
+
+    @Test
+    fun init_whenLaunchDefaultsThrows_fallsBackToFactoryDefaults_andDoesNotCrash() = runBlocking {
+        repoCache.save(listOf("repoA"), nowEpochMs = 1)
+        val failingProfileStore = PreferenceProfileStore(ThrowingPreferenceProfileDao())
+        val api = FakeCursorApiClient(
+            onListModels = { ListModelsResponse(items = listOf(ModelListItem("m1", "M1"))) },
+        )
+        val vm = LaunchViewModel(
+            api, repoCache, promptStore, runModeStore, failingProfileStore, writeCoordinator,
+        )
+
+        // No crash; the screen lands on factory defaults rather than failing to compose.
+        val state = vm.awaitState { it.repoUrls.isNotEmpty() }
+        assertFalse("factory default: plan mode off", state.planMode)
+        assertTrue("factory default: auto-create PR on", state.autoCreatePr)
+        assertNull("factory default: no model selected", state.selectedModelId)
+    }
+
+    private fun createAgentResponse() = CreateAgentResponse(
+        agent = CloudAgent(id = "agent1", status = "ACTIVE", createdAt = "t", updatedAt = "t"),
+        run = Run(id = "run1", agentId = "agent1", status = "RUNNING", createdAt = "t", updatedAt = "t"),
+    )
+
+    /** A [PreferenceProfileDao] whose reads fail, to exercise the launchDefaults() crash guard. */
+    private class ThrowingPreferenceProfileDao : PreferenceProfileDao {
+        override suspend fun insertIfAbsent(profile: PreferenceProfileEntity): Unit = throw IOException("db down")
+        override suspend fun upsert(profile: PreferenceProfileEntity): Unit = throw IOException("db down")
+        override suspend fun profile(id: Long): PreferenceProfileEntity? = throw IOException("db down")
+        override suspend fun allProfiles(): List<PreferenceProfileEntity> = emptyList()
+        override suspend fun clear() = Unit
     }
 
     private suspend fun LaunchViewModel.awaitState(predicate: (LaunchUiState) -> Boolean): LaunchUiState =

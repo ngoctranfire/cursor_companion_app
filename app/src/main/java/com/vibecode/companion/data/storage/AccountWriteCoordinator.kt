@@ -1,9 +1,11 @@
 package com.vibecode.companion.data.storage
 
+import android.util.Log
 import com.vibecode.companion.di.AppCoroutineScope
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -50,8 +52,25 @@ class AccountWriteCoordinator(
     @Volatile
     private var writeScope: CoroutineScope = newWriteScope()
 
+    private companion object {
+        const val TAG = "AccountWriteCoord"
+    }
+
+    /**
+     * A child-of-app scope for fire-and-forget account writes. The [CoroutineExceptionHandler] is
+     * the safety net for [launchWrite]: those writes are launched without anyone awaiting them, so
+     * an exception escaping the block has no `Deferred.await` to catch it. The [SupervisorJob]
+     * already keeps one failing write from cancelling its siblings or this scope, but without a
+     * handler the uncaught exception would still reach the thread's default handler and crash the
+     * process. Logging it here keeps a best-effort write best-effort: it fails quietly, and the
+     * scope (and [wipe]) keep working.
+     */
     private fun newWriteScope(): CoroutineScope =
-        CoroutineScope(appScope.coroutineContext + SupervisorJob(appScope.coroutineContext[Job]))
+        CoroutineScope(
+            appScope.coroutineContext +
+                SupervisorJob(appScope.coroutineContext[Job]) +
+                CoroutineExceptionHandler { _, e -> Log.w(TAG, "Account write failed", e) },
+        )
 
     /**
      * Launches a best-effort account-scoped write that must outlive the ViewModel that started it

@@ -25,6 +25,7 @@ class AccountStore(
     @AppContext private val context: Context,
     private val database: CompanionDatabase,
     private val writeCoordinator: AccountWriteCoordinator,
+    private val runModeStore: RunModeStore,
 ) {
 
     /**
@@ -59,6 +60,9 @@ class AccountStore(
         } catch (e: Exception) {
             throw IOException("Failed to clear the local database on sign-out", e)
         }
+        // The Room tables are wiped; drop the in-memory launch → detail mode bridge too so no
+        // remembered-but-not-yet-persisted mode survives the wipe (the durable rows are gone).
+        runModeStore.clearPending()
         context.companionDataStore.edit { it.clear() }
     }
 }

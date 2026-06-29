@@ -97,7 +97,17 @@ class LaunchViewModel(
             // restored selection. Loading models concurrently (the old shape) let validation race
             // ahead of the restore, see a still-null selection, and let a stale/unsupported id
             // survive. These are local prefs — the API can't supply them.
-            val defaults = preferenceProfileStore.launchDefaults()
+            // Room I/O can fail (corrupt/locked DB); a returning user must still land on a usable
+            // launch screen, so fall back to factory defaults rather than letting the exception
+            // escape viewModelScope.launch and crash the screen.
+            val defaults = try {
+                preferenceProfileStore.launchDefaults()
+            } catch (e: CancellationException) {
+                throw e // never swallow cancellation — structured concurrency depends on it
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to restore launch defaults; using factory defaults", e)
+                PreferenceProfileStore.FACTORY_DEFAULTS
+            }
             _uiState.update {
                 it.copy(
                     selectedRepo = defaults.repoUrl,
@@ -223,11 +233,25 @@ class LaunchViewModel(
                     CreateAgentRequest(
                         prompt = PromptBody(state.prompt),
                         repos = listOf(RepoConfig(url = repo)),
-                        model = state.selectedModelId?.let { ModelRef(it) },
+                        // Only send a ModelRef the freshly loaded list actually offers. The
+                        // launch-time analog of loadModels()'s stale-selection drop: when the model
+                        // list failed to load or is still in flight, `models` is empty, so a restored
+                        // id isn't a member and we degrade to the server default instead of sending a
+                        // removed/unsupported id the create request would reject. Mirrors the repo
+                        // `selectedRepo in repoUrls` membership gate.
+                        model = state.selectedModelId
+                            ?.takeIf { id -> state.models.any { it.id == id } }
+                            ?.let { ModelRef(it) },
                         autoCreatePR = state.autoCreatePr,
                         mode = chosenMode,
                     ),
                 )
+                // Remember the chosen mode synchronously (in-memory, on the app-scoped RunModeStore
+                // singleton) BEFORE navigating: persistLaunchResult below records it to Room on the
+                // background write scope, so a fast follow-up on the detail screen could read Room
+                // before that write lands. The relay closes that window so the follow-up still
+                // inherits the mode. See RunModeStore.remember.
+                runModeStore.remember(response.run.id, chosenMode)
                 // The remote agent exists now, so navigate to it regardless of whether the
                 // on-device bookkeeping below succeeds — a failed local write must never strand
                 // the user on the launch screen.

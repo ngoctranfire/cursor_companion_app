@@ -1,5 +1,6 @@
 package com.vibecode.companion.ui.detail
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vibecode.companion.data.api.AgentMode
@@ -22,6 +23,7 @@ import dev.zacsweers.metro.AssistedInject
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metrox.viewmodel.ManualViewModelAssistedFactory
 import dev.zacsweers.metrox.viewmodel.ManualViewModelAssistedFactoryKey
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -123,6 +125,7 @@ class AgentDetailViewModel(
     }
 
     private companion object {
+        const val TAG = "AgentDetailVM"
         const val MAX_RECONNECT_ATTEMPTS = 5
         const val INITIAL_BACKOFF_MS = 1_000L
         const val MAX_BACKOFF_MS = 30_000L
@@ -254,15 +257,32 @@ class AgentDetailViewModel(
                 val run = apiClient.createRun(agentId, CreateRunRequest(prompt = PromptBody(text))).run
                 // A stale in-flight load must not overwrite the just-created run.
                 loadJob?.cancel()
-                promptStore.save(run.id, text)
-                // Carry the mode forward ONLY when the prior newest run's mode is actually known.
-                // For legacy or externally-created runs the mode is genuinely unknown, and stamping
-                // a guess (e.g. "agent") would fabricate a mode row, poisoning the latest-mode
-                // signal CUR-8's Build action gates on. Persist nothing and leave latestMode null
-                // until a mode is genuinely observed.
-                val inheritedMode = priorNewest?.let { runModeStore.modeForRun(it.id) }
-                if (inheritedMode != null) {
-                    runModeStore.recordMode(run.id, agentId, inheritedMode)
+                // The remote run exists now. From here on a *local* persistence failure must NOT
+                // route into the send-failure path below (which shows an error → the user retries →
+                // a DUPLICATE follow-up). Mirror the launch path's isolation: keep the created run,
+                // and surface a non-fatal note instead of failing the send. CancellationException is
+                // rethrown so structured concurrency (e.g. the screen being closed) still unwinds.
+                var inheritedMode: String? = null
+                val localWriteFailed = try {
+                    // Carry the mode forward ONLY when the prior newest run's mode is actually known
+                    // — from Room, or, when a fast follow-up beats the launch screen's background
+                    // mode write, the in-memory relay that write also populated synchronously (see
+                    // RunModeStore.remember). For legacy or externally-created runs the mode is
+                    // genuinely unknown, and stamping a guess (e.g. "agent") would fabricate a mode
+                    // row, poisoning the latest-mode signal CUR-8's Build action gates on. Persist
+                    // nothing and leave latestMode null until a mode is genuinely observed. Resolved
+                    // first so a later prompt-save failure can't drop an already-known mode.
+                    inheritedMode = priorNewest?.let { runModeStore.modeForRun(it.id) }
+                    promptStore.save(run.id, text)
+                    if (inheritedMode != null) {
+                        runModeStore.recordMode(run.id, agentId, inheritedMode)
+                    }
+                    false
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to persist follow-up local state for run ${run.id}", e)
+                    true
                 }
                 lastEventId = null
                 lastTextKind = null
@@ -276,6 +296,11 @@ class AgentDetailViewModel(
                         latestMode = inheritedMode,
                         timeline = listOf(TimelineItem.UserPrompt(text)),
                         showReconnect = false,
+                        transientMessage = if (localWriteFailed) {
+                            "Run created, but local state could not be saved."
+                        } else {
+                            state.transientMessage
+                        },
                     )
                 }
                 // Re-key the mode observer to the new newest run (set eagerly above for no flicker;
