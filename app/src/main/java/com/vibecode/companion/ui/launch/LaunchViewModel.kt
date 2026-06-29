@@ -51,7 +51,18 @@ data class LaunchUiState(
     val launchError: String? = null,
     val launchedAgentId: String? = null,
 ) {
-    val canLaunch: Boolean get() = selectedRepo != null && prompt.isNotBlank() && !launching
+    val canLaunch: Boolean
+        // The selected repo must be present in the loaded list AND the list must be settled (not
+        // mid-fetch). A repo restored from a prior session is only trustworthy once validated
+        // against the freshly loaded repos — without the membership + `!reposLoading` gate, the
+        // no-cache path (where validation happens only after refreshRepos() returns) could launch
+        // a stale repo the server then rejects. The membership check is the launch-time analog of
+        // the loadModels()/refreshRepos() stale-selection drops, keeping repo and model consistent.
+        get() = selectedRepo != null &&
+            selectedRepo in repoUrls &&
+            !reposLoading &&
+            prompt.isNotBlank() &&
+            !launching
 }
 
 /**

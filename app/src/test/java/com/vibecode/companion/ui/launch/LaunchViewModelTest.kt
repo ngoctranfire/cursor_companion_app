@@ -6,7 +6,9 @@ import androidx.room.Room
 import com.vibecode.companion.data.api.CloudAgent
 import com.vibecode.companion.data.api.CreateAgentResponse
 import com.vibecode.companion.data.api.ListModelsResponse
+import com.vibecode.companion.data.api.ListRepositoriesResponse
 import com.vibecode.companion.data.api.ModelListItem
+import com.vibecode.companion.data.api.Repository
 import com.vibecode.companion.data.api.Run
 import com.vibecode.companion.data.storage.LaunchDefaults
 import com.vibecode.companion.data.storage.PreferenceProfileStore
@@ -16,6 +18,7 @@ import com.vibecode.companion.data.storage.RunModeStore
 import com.vibecode.companion.data.storage.companionDataStore
 import com.vibecode.companion.data.storage.db.CompanionDatabase
 import com.vibecode.companion.testutil.FakeCursorApiClient
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -31,6 +34,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -143,6 +147,55 @@ class LaunchViewModelTest {
         assertEquals("build the thing", promptStore.get("run1"))
         assertEquals("agent", db.runModeDao().modeForRun("run1"))
         assertEquals("repoA", preferenceProfileStore.launchDefaults().repoUrl)
+    }
+
+    @Test
+    fun launch_withNoCachedRepos_isGatedUntilFetchValidatesAndDropsStaleRepo() = runBlocking {
+        // No cached list → init takes the network (refreshRepos) path. The restored repo is stale.
+        preferenceProfileStore.saveLaunchDefaults(
+            LaunchDefaults(repoUrl = "gone-repo", modelId = null, autoCreatePr = true, mode = "agent"),
+        )
+        val fetchGate = CompletableDeferred<Unit>()
+        val api = FakeCursorApiClient(
+            onListRepositories = { fetchGate.await(); ListRepositoriesResponse(items = listOf(Repository("repoA"))) },
+        )
+
+        val vm = viewModel(api)
+        vm.setPrompt("do the thing")
+
+        // Window: the fetch is still in flight, so the stale restored repo must NOT be launchable.
+        val midFetch = vm.awaitState { it.reposLoading }
+        assertEquals("gone-repo", midFetch.selectedRepo)
+        assertFalse("must not launch a stale repo before fresh validation", midFetch.canLaunch)
+
+        // Fetch resolves: the stale repo is dropped and launch stays disabled.
+        fetchGate.complete(Unit)
+        val settled = vm.awaitState { !it.reposLoading }
+        assertNull("stale repo dropped after validation", settled.selectedRepo)
+        assertFalse(settled.canLaunch)
+    }
+
+    @Test
+    fun launch_withNoCachedRepos_validRestoredRepoBecomesLaunchableAfterFetch() = runBlocking {
+        // No cache; the restored repo IS valid — it must become launchable once the fetch resolves.
+        preferenceProfileStore.saveLaunchDefaults(
+            LaunchDefaults(repoUrl = "repoA", modelId = null, autoCreatePr = true, mode = "agent"),
+        )
+        val fetchGate = CompletableDeferred<Unit>()
+        val api = FakeCursorApiClient(
+            onListRepositories = { fetchGate.await(); ListRepositoriesResponse(items = listOf(Repository("repoA"))) },
+        )
+
+        val vm = viewModel(api)
+        vm.setPrompt("do the thing")
+
+        // Even a valid restored repo is gated while validation is in flight.
+        assertFalse("valid repo still gated until fetch resolves", vm.awaitState { it.reposLoading }.canLaunch)
+
+        fetchGate.complete(Unit)
+        val settled = vm.awaitState { !it.reposLoading }
+        assertEquals("repoA", settled.selectedRepo)
+        assertTrue("valid repo launchable once validated", settled.canLaunch)
     }
 
     private suspend fun LaunchViewModel.awaitState(predicate: (LaunchUiState) -> Boolean): LaunchUiState =
